@@ -177,3 +177,4 @@ The native recognizer stops before the microphone transfers to the Gemini Live c
 held only in process memory. There is no boot receiver, sticky restart, or automatic re-arm after a
 force-stop. See [`docs/android-assistant.md`](docs/android-assistant.md) for the lifecycle and
 [`docs/realtime-flow.md`](docs/realtime-flow.md) for the M6 transport.
+# englishdrive
