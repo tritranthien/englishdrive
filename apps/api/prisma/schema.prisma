@@ -1,0 +1,211 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EnglishLevel {
+  A1
+  A2
+  B1
+  B2
+  C1
+  C2
+  UNKNOWN
+}
+
+enum LanguageMode {
+  BEGINNER
+  INTERMEDIATE
+  IMMERSION
+}
+
+enum CorrectionMode {
+  IMPORTANT_ONLY
+  FREQUENT
+  ON_REQUEST
+}
+
+enum SessionType {
+  COMMUTE
+  FREE_TALK
+  PRACTICE
+}
+
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
+  FAILED
+}
+
+enum TranscriptRole {
+  USER
+  ASSISTANT
+}
+
+enum AnalysisStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id           String                @id @default(uuid())
+  email        String                @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  profile      LearningProfile?
+  sessions     ConversationSession[]
+  mistakes     Mistake[]
+  vocabulary   VocabularyItem[]
+}
+
+model LearningProfile {
+  id                String         @id @default(uuid())
+  userId            String         @unique
+  level             EnglishLevel   @default(UNKNOWN)
+  preferredLanguage String         @default("vi")
+  languageMode      LanguageMode   @default(INTERMEDIATE)
+  englishRatio      Float          @default(0.8)
+  correctionMode    CorrectionMode @default(IMPORTANT_ONLY)
+  conversationStyle String         @default("friendly")
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ConversationSession {
+  id              String              @id @default(uuid())
+  userId          String
+  type            SessionType
+  provider        String?
+  model           String?
+  startedAt       DateTime            @default(now())
+  endedAt         DateTime?
+  durationSeconds Int?
+  status          SessionStatus       @default(ACTIVE)
+  summary         String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transcript      TranscriptMessage[]
+  analysis        SessionAnalysis?
+  mistakes        SessionMistake[]
+  vocabulary      SessionVocabulary[]
+
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([userId, status])
+}
+
+model TranscriptMessage {
+  id              String              @id @default(uuid())
+  sessionId       String
+  clientMessageId String
+  role            TranscriptRole
+  content         String
+  occurredAt      DateTime
+  createdAt       DateTime            @default(now())
+  session         ConversationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, clientMessageId])
+  @@index([sessionId, occurredAt])
+}
+
+model SessionAnalysis {
+  id                String              @id @default(uuid())
+  sessionId         String              @unique
+  status            AnalysisStatus      @default(PENDING)
+  provider          String              @default("gemini")
+  model             String
+  summary           String?
+  mainTopics        Json?
+  grammarIssues     Json?
+  newVocabulary     Json?
+  strengths         Json?
+  recommendedTopics Json?
+  nextSessionFocus  Json?
+  errorMessage      String?
+  attempts          Int                 @default(0)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  memoryUpdatedAt   DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  session           ConversationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([status, updatedAt])
+}
+
+model Mistake {
+  id               String           @id @default(uuid())
+  userId           String
+  patternKey       String
+  pattern          String
+  latestOriginal   String
+  latestSuggestion String
+  explanationVi    String
+  occurrenceCount  Int              @default(0)
+  firstSeenAt      DateTime         @default(now())
+  lastSeenAt       DateTime         @default(now())
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions         SessionMistake[]
+
+  @@unique([userId, patternKey])
+  @@index([userId, occurrenceCount, lastSeenAt(sort: Desc)])
+}
+
+model SessionMistake {
+  sessionId     String
+  mistakeId     String
+  original      String
+  suggestion    String
+  explanationVi String
+  createdAt     DateTime            @default(now())
+  session       ConversationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  mistake       Mistake             @relation(fields: [mistakeId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, mistakeId])
+  @@index([mistakeId])
+}
+
+model VocabularyItem {
+  id              String              @id @default(uuid())
+  userId          String
+  termKey         String
+  term            String
+  meaningVi       String
+  example         String
+  familiarity     Float               @default(0.2)
+  occurrenceCount Int                 @default(0)
+  reviewCount     Int                 @default(0)
+  correctCount    Int                 @default(0)
+  firstSeenAt     DateTime            @default(now())
+  lastSeenAt      DateTime            @default(now())
+  nextReviewAt    DateTime            @default(now())
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions        SessionVocabulary[]
+
+  @@unique([userId, termKey])
+  @@index([userId, nextReviewAt, lastSeenAt(sort: Desc)])
+}
+
+model SessionVocabulary {
+  sessionId        String
+  vocabularyItemId String
+  createdAt        DateTime            @default(now())
+  session          ConversationSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  vocabularyItem   VocabularyItem      @relation(fields: [vocabularyItemId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, vocabularyItemId])
+  @@index([vocabularyItemId])
+}

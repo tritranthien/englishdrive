@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+apps/mobile/android/.gradle
+apps/mobile/android/app/build
+apps/mobile/android/build
+apps/mobile/android/gradlew
+apps/mobile/android/gradlew.bat
+apps/mobile/android/gradle/wrapper/gradle-wrapper.jar
+apps/mobile/android/app/debug.keystore
+pnpm-lock.yaml

@@ -1,0 +1,30 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Android
+.android-user-home/
+.gradle-user-home/
+apps/mobile/android/.gradle/
+apps/mobile/android/app/build/
+apps/mobile/android/build/
+apps/mobile/android/local.properties
+apps/mobile/android/.cxx/
+apps/mobile/android/app/.cxx/
+*.jks
+*.keystore
+!apps/mobile/android/app/debug.keystore
+
+# Metro
+*.jsbundle
+.metro-health-check*
+
+# Prisma
+apps/api/prisma/dev.db

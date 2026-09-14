@@ -1,0 +1,36 @@
+{
+  "name": "english-drive",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=22.11.0"
+  },
+  "scripts": {
+    "android": "pnpm --filter @english-drive/mobile android",
+    "api:dev": "pnpm --filter @english-drive/api start:dev",
+    "mobile:start": "pnpm --filter @english-drive/mobile start",
+    "dev": "concurrently --kill-others-on-fail --names api,mobile \"pnpm api:dev\" \"pnpm mobile:start\"",
+    "build": "pnpm --filter @english-drive/shared build && pnpm --filter @english-drive/api build",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @english-drive/api prisma:generate",
+    "db:migrate": "pnpm --filter @english-drive/api prisma:migrate",
+    "db:studio": "pnpm --filter @english-drive/api prisma:studio"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.5",
+    "prettier": "3.6.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma"
+    ]
+  }
+}

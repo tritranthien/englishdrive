@@ -1,0 +1,8 @@
+module.exports = {
+  root: true,
+  extends: ['@english-drive/eslint-config'],
+  parserOptions: {
+    project: './tsconfig.json',
+    tsconfigRootDir: __dirname,
+  },
+};

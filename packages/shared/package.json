@@ -1,0 +1,30 @@
+{
+  "name": "@english-drive/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@english-drive/eslint-config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "eslint": "8.57.1",
+    "typescript": "6.0.3",
+    "vitest": "^4.1.2"
+  }
+}
