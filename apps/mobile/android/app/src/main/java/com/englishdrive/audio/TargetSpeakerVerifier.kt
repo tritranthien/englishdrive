@@ -4,42 +4,78 @@ import android.content.Context
 import android.util.Log
 import com.englishdrive.BuildConfig
 import java.io.ByteArrayOutputStream
+import kotlin.math.sqrt
 
 internal class TargetSpeakerVerifier private constructor(
   private val engine: SherpaSpeakerEmbeddingEngine,
-  private val profile: FloatArray,
+  private val profile: SpeakerProfile,
 ) {
-  private val speech = ByteArrayOutputStream(WINDOW_BYTES)
-  private var scored = false
+  private val speech = ByteArrayOutputStream(MAX_WINDOW_BYTES)
+  private val highPass = Pcm16HighPass()
+  private var totalSpeechBytes = 0
+  private var bytesSinceScore = 0
 
-  /** Returns one cosine score once enough speech has accumulated for a stable embedding. */
+  val threshold: Float
+    get() =
+      minOf(
+        profile.threshold,
+        if (profile.kind == SpeakerProfileKind.HEADSET) HEADSET_MAX_THRESHOLD
+        else PHONE_MAX_THRESHOLD,
+      )
+
+  val profileKind: SpeakerProfileKind
+    get() = profile.kind
+
+  /** Returns the best similarity across the route-specific enrollment samples. */
   fun score(bytes: ByteArray): Float? {
-    if (scored) return null
-    val remaining = WINDOW_BYTES - speech.size()
-    speech.write(bytes, 0, minOf(bytes.size, remaining))
-    if (speech.size() < WINDOW_BYTES) return null
+    // Wind and road rumble are filtered out of the embedding path only, so the
+    // audio forwarded to Gemini stays untouched.
+    val filtered = highPass.process(bytes)
+    if (!hasVoiceEnergy(filtered)) return null
+    append(filtered)
+    if (totalSpeechBytes < INITIAL_SCORE_BYTES) return null
+    if (bytesSinceScore < RESCORE_STEP_BYTES) return null
+    bytesSinceScore = 0
     return computeScore()
   }
 
-  // Short utterances can end before the full window is collected. Require at
-  // least 800 ms of captured audio; pad only to the extractor's 1-second input.
+  /** Evaluates a completed short utterance by tiling it to the model's minimum input. */
   fun finishScore(): Float? {
-    if (scored || speech.size() < MIN_SHORT_BYTES) return null
+    if (totalSpeechBytes < MIN_UTTERANCE_BYTES) return null
     return computeScore()
+  }
+
+  private fun append(bytes: ByteArray) {
+    totalSpeechBytes += bytes.size
+    bytesSinceScore += bytes.size
+    val combined = speech.toByteArray() + bytes
+    val start = (combined.size - MAX_WINDOW_BYTES).coerceAtLeast(0)
+    speech.reset()
+    speech.write(combined, start, combined.size - start)
   }
 
   private fun computeScore(): Float {
-    scored = true
     val bytes = speech.toByteArray()
-    val candidate = engine.compute(bytes.copyOf(maxOf(bytes.size, 32_000)))
-    val similarity = SherpaSpeakerEmbeddingEngine.cosineSimilarity(profile, candidate)
-    if (BuildConfig.DEBUG) Log.d("EnglishDriveAudio", "Speaker similarity=$similarity")
+    val candidateBytes = tileToMinimum(bytes)
+    val candidate = engine.compute(candidateBytes)
+    val similarities =
+      profile.embeddings.map { SherpaSpeakerEmbeddingEngine.cosineSimilarity(it, candidate) }
+    val similarity = similarities.maxOrNull() ?: -1f
+    if (BuildConfig.DEBUG) {
+      Log.d(
+        TAG,
+        "Speaker profile=${profile.kind.storageName} similarity=$similarity " +
+          "threshold=$threshold bytes=$totalSpeechBytes references=${similarities.size}",
+      )
+    }
     return similarity
   }
 
   fun resetTurn() {
     speech.reset()
-    scored = false
+    highPass.reset()
+    totalSpeechBytes = 0
+    bytesSinceScore = 0
   }
 
   fun close() {
@@ -47,14 +83,38 @@ internal class TargetSpeakerVerifier private constructor(
     engine.close()
   }
 
-  companion object {
-    // The gate adds 240 ms of pre-roll, so verification normally completes after
-    // roughly one second of newly detected speech.
-    private const val WINDOW_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 6 / 5
-    private const val MIN_SHORT_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 4 / 5
+  private fun hasVoiceEnergy(bytes: ByteArray): Boolean {
+    var energy = 0.0
+    var samples = 0
+    var index = 0
+    while (index + 1 < bytes.size) {
+      val sample =
+        ((bytes[index].toInt() and 0xff) or (bytes[index + 1].toInt() shl 8))
+          .toShort()
+          .toDouble()
+      energy += sample * sample
+      samples += 1
+      index += 2
+    }
+    return samples > 0 && sqrt(energy / samples) >= MIN_SCORING_RMS
+  }
 
-    fun create(context: Context): TargetSpeakerVerifier? {
-      val profile = SpeakerProfileStore(context).load() ?: return null
+  companion object {
+    // Score at 800 ms for lower latency. The sample is repeated to the model's one-second minimum.
+    private const val INITIAL_SCORE_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 8 / 10
+    private const val MIN_UTTERANCE_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2 / 10
+    private const val MAX_WINDOW_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2
+    private const val RESCORE_STEP_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2 / 10
+    private const val PHONE_MIN_THRESHOLD = 0.22f
+    private const val PHONE_MAX_THRESHOLD = 0.30f
+    private const val HEADSET_MIN_THRESHOLD = 0.10f
+    private const val HEADSET_MAX_THRESHOLD = 0.16f
+    private const val CALIBRATION_MARGIN = 0.22f
+    private const val MIN_SCORING_RMS = 120.0
+    private const val TAG = "EnglishDriveAudio"
+
+    fun create(context: Context, kind: SpeakerProfileKind): TargetSpeakerVerifier? {
+      val profile = SpeakerProfileStore(context).load(kind) ?: return null
       val engine = SherpaSpeakerEmbeddingEngine(context)
       return try {
         TargetSpeakerVerifier(engine, profile)
@@ -62,6 +122,42 @@ internal class TargetSpeakerVerifier private constructor(
         engine.close()
         throw error
       }
+    }
+
+    /** 20th-percentile best match between enrollment segments. Low means they disagree. */
+    fun enrollmentBaseline(embeddings: List<FloatArray>): Float {
+      if (embeddings.size < 2) return 0f
+      val bestMatches =
+        embeddings.mapIndexed { index, embedding ->
+          embeddings
+            .filterIndexed { otherIndex, _ -> otherIndex != index }
+            .maxOf { other -> SherpaSpeakerEmbeddingEngine.cosineSimilarity(embedding, other) }
+        }
+      return bestMatches.sorted()[bestMatches.size / 5]
+    }
+
+    fun calibratedThreshold(
+      embeddings: List<FloatArray>,
+      kind: SpeakerProfileKind = SpeakerProfileKind.PHONE,
+    ): Float {
+      val minimum =
+        if (kind == SpeakerProfileKind.HEADSET) HEADSET_MIN_THRESHOLD else PHONE_MIN_THRESHOLD
+      val maximum =
+        if (kind == SpeakerProfileKind.HEADSET) HEADSET_MAX_THRESHOLD else PHONE_MAX_THRESHOLD
+      if (embeddings.size < 2) return maximum
+      return (enrollmentBaseline(embeddings) - CALIBRATION_MARGIN).coerceIn(minimum, maximum)
+    }
+
+    private fun tileToMinimum(bytes: ByteArray): ByteArray {
+      if (bytes.size >= SherpaSpeakerEmbeddingEngine.MIN_SAMPLE_BYTES) return bytes
+      val repeated = ByteArray(SherpaSpeakerEmbeddingEngine.MIN_SAMPLE_BYTES)
+      var offset = 0
+      while (offset < repeated.size) {
+        val copyLength = minOf(bytes.size, repeated.size - offset)
+        System.arraycopy(bytes, 0, repeated, offset, copyLength)
+        offset += copyLength
+      }
+      return repeated
     }
   }
 }

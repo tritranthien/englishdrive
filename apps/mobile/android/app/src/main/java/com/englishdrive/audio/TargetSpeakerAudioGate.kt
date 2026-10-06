@@ -6,32 +6,28 @@ internal data class TargetSpeakerGateResult(
   val chunks: List<ByteArray> = emptyList(),
   val activity: Boolean? = null,
   val started: Boolean = false,
+  val confidence: Float? = null,
+  val reason: String? = null,
 )
 
-/**
- * Holds a short turn until the enrolled speaker is verified. A rejected turn is
- * locked out until silence so another speaker cannot become accepted midway.
- */
+/** Holds the complete turn while several speaker windows are evaluated. */
 internal class TargetSpeakerAudioGate(
   private val score: (ByteArray) -> Float?,
-  private val threshold: Float = 0.38f,
-  private val requiredHits: Int = 1,
-  private val preRollChunks: Int = 6,
-  private val maxPendingChunks: Int = 40,
+  private val threshold: Float = 0.36f,
+  private val preRollChunks: Int = 10,
+  private val maxPendingChunks: Int = 2_250,
   private val finishScore: () -> Float? = { null },
+  private val clockMillis: () -> Long = System::currentTimeMillis,
 ) {
   private val preRoll = ArrayDeque<ByteArray>()
   private val pending = ArrayDeque<ByteArray>()
   private var candidate = false
   private var accepted = false
-  private var lockedOut = false
-  private var hits = 0
+  private var adequateHits = 0
+  private var bestScore: Float? = null
+  private var lastAcceptedAt = Long.MIN_VALUE
 
-  fun process(
-    chunk: ByteArray,
-    speaking: Boolean,
-    activityChange: Boolean?,
-  ): TargetSpeakerGateResult {
+  fun process(chunk: ByteArray, speaking: Boolean, activityChange: Boolean?): TargetSpeakerGateResult {
     if (!candidate && !speaking && activityChange != true) {
       addBounded(preRoll, chunk, preRollChunks)
       return TargetSpeakerGateResult()
@@ -40,77 +36,110 @@ internal class TargetSpeakerAudioGate(
     if (activityChange == true) {
       candidate = true
       accepted = false
-      lockedOut = false
-      hits = 0
+      adequateHits = 0
+      bestScore = null
       pending.clear()
       pending.addAll(preRoll)
       preRoll.clear()
     }
 
     if (!candidate) return TargetSpeakerGateResult()
-    // AudioRecord reuses its read buffer. Own every buffered frame so later
-    // reads cannot overwrite the beginning of the verified utterance.
     pending.addLast(chunk.copyOf())
+    while (pending.size > maxPendingChunks) pending.removeFirst()
 
     var justAccepted = false
-    if (!accepted && !lockedOut) {
-      // Feed the pre-roll into the embedding window as well. This preserves the
-      // beginning of the utterance and shortens the perceived verification delay.
-      val scoreInput =
-        if (activityChange == true && pending.size > 1) {
-          ByteArray(pending.sumOf { it.size }).also { combined ->
-            var offset = 0
-            pending.forEach { bytes ->
-              bytes.copyInto(combined, destinationOffset = offset)
-              offset += bytes.size
-            }
-          }
-        } else {
-          chunk
+    var acceptanceReason: String? = null
+    if (!accepted) {
+      // Keep pre-roll for Gemini but exclude its mostly silent frames from the
+      // speaker embedding so short utterances are not diluted.
+      val nextScore = score(chunk)
+      if (nextScore != null) {
+        bestScore = maxOf(bestScore ?: nextScore, nextScore)
+        val effectiveThreshold = effectiveThreshold()
+        adequateHits = if (nextScore >= effectiveThreshold) adequateHits + 1 else 0
+        if (adequateHits >= REQUIRED_ADEQUATE_HITS) {
+          justAccepted = true
+          acceptanceReason = "verified-consensus"
         }
-      val nextScore = score(scoreInput) ?: if (activityChange == false) finishScore() else null
-      hits = if (nextScore != null && nextScore >= threshold) hits + 1 else 0
-      if (hits >= requiredHits) {
-        accepted = true
-        justAccepted = true
       }
-      if (!accepted && pending.size >= maxPendingChunks) lockedOut = true
+
+      if (!justAccepted && activityChange == false) {
+        val finalScore = finishScore()
+        if (finalScore != null) {
+          bestScore = maxOf(bestScore ?: finalScore, finalScore)
+          val endThreshold = effectiveThreshold()
+          if (finalScore >= endThreshold) {
+            justAccepted = true
+            acceptanceReason = "end-of-turn-match"
+          }
+        }
+      }
+
+      if (justAccepted) {
+        accepted = true
+        lastAcceptedAt = clockMillis()
+      }
     }
 
     val output =
-      if (accepted) {
-        pending.toList().also { pending.clear() }
-      } else {
-        while (pending.size > maxPendingChunks) pending.removeFirst()
-        emptyList()
-      }
+      if (accepted) pending.toList().also { pending.clear() }
+      else emptyList()
     val activity = if (justAccepted) true else null
 
     if (activityChange == false) {
       val endActivity = if (accepted) false else null
+      val result =
+        TargetSpeakerGateResult(
+          chunks = output,
+          activity = endActivity ?: activity,
+          started = justAccepted,
+          confidence = bestScore,
+          reason = acceptanceReason ?: if (accepted) "accepted" else "no-match",
+        )
       resetTurn()
       addBounded(preRoll, chunk, preRollChunks)
-      return TargetSpeakerGateResult(output, endActivity ?: activity, justAccepted)
+      return result
     }
 
-    return TargetSpeakerGateResult(output, activity, justAccepted)
+    return TargetSpeakerGateResult(
+      chunks = output,
+      activity = activity,
+      started = justAccepted,
+      confidence = bestScore,
+      reason = acceptanceReason,
+    )
   }
 
   fun reset() {
     preRoll.clear()
+    lastAcceptedAt = Long.MIN_VALUE
     resetTurn()
+  }
+
+  private fun effectiveThreshold(): Float {
+    val continuityActive =
+      lastAcceptedAt != Long.MIN_VALUE && clockMillis() - lastAcceptedAt <= CONTINUITY_WINDOW_MS
+    return if (continuityActive) (threshold - CONTINUITY_MARGIN).coerceAtLeast(MIN_THRESHOLD)
+    else threshold
   }
 
   private fun resetTurn() {
     pending.clear()
     candidate = false
     accepted = false
-    lockedOut = false
-    hits = 0
+    adequateHits = 0
+    bestScore = null
   }
 
   private fun addBounded(queue: ArrayDeque<ByteArray>, chunk: ByteArray, limit: Int) {
     queue.addLast(chunk.copyOf())
     while (queue.size > limit) queue.removeFirst()
+  }
+
+  private companion object {
+    const val REQUIRED_ADEQUATE_HITS = 2
+    const val CONTINUITY_MARGIN = 0.02f
+    const val CONTINUITY_WINDOW_MS = 6_000L
+    const val MIN_THRESHOLD = 0.14f
   }
 }

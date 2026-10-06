@@ -12,6 +12,16 @@ export type RealtimeAuthorization = {
   model: string;
 };
 
+export type GeminiFunctionDeclaration = {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown>;
+};
+
+export type GeminiLiveTool = {
+  functionDeclarations: GeminiFunctionDeclaration[];
+};
+
 export type GeminiLiveToken = {
   provider: 'gemini';
   token: string;
@@ -27,6 +37,7 @@ export type GeminiLiveToken = {
   };
   sessionConfig: {
     systemInstruction: string;
+    tools?: GeminiLiveTool[];
   };
   learningContext: {
     currentFocus: string[];

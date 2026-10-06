@@ -22,12 +22,16 @@ import { liveAudioService } from '../services/liveAudio.service';
 import type {
   LiveConversationState,
   TranscriptEvent,
+  TranscriptLine,
+  VocabularyHighlight,
 } from '../types/liveConversation.types';
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const TRANSCRIPT_BATCH_SIZE = 20;
 const ANALYSIS_POLL_INTERVAL_MS = 1_500;
 const ANALYSIS_POLL_ATTEMPTS = 20;
+const THINKING_TIMEOUT_MS = 15_000;
+const TRANSCRIPT_HISTORY_LIMIT = 20;
 
 type StartLiveConversationOptions = {
   conversationMode?: ConversationMode;
@@ -73,6 +77,10 @@ export function useLiveConversation() {
   const [status, setStatus] = useState<LiveConversationState>('idle');
   const [error, setError] = useState<string>();
   const [latestTranscript, setLatestTranscript] = useState<TranscriptEvent>();
+  const [assistantTranscript, setAssistantTranscript] = useState('');
+  const [vocabulary, setVocabulary] = useState<VocabularyHighlight>();
+  const [history, setHistory] = useState<TranscriptLine[]>([]);
+  const [filterBypassed, setFilterBypassed] = useState(false);
   const [audioRoute, setAudioRoute] = useState<CommuteAudioRoute>({
     type: 'other',
     name: 'Audio device',
@@ -100,6 +108,7 @@ export function useLiveConversation() {
   const audioRestartRef = useRef(Promise.resolve());
   const transcriptPendingRef = useRef<TranscriptMessageInput[]>([]);
   const transcriptSequenceRef = useRef(0);
+  const transcriptLineRef = useRef(0);
   const transcriptUploadRef = useRef<Promise<void>>(Promise.resolve());
   const userTurnStartedAtRef = useRef<string | undefined>(undefined);
   const lastSessionIdRef = useRef<string | undefined>(undefined);
@@ -166,7 +175,19 @@ export function useLiveConversation() {
       }),
       provider.onTranscript(event => {
         setLatestTranscript(event);
+        if (event.role === 'assistant') setAssistantTranscript(event.text);
         const content = event.text.trim();
+        if (event.final && content) {
+          transcriptLineRef.current += 1;
+          const line: TranscriptLine = {
+            id: transcriptLineRef.current,
+            role: event.role,
+            text: content,
+          };
+          setHistory(previous =>
+            [...previous, line].slice(-TRANSCRIPT_HISTORY_LIMIT),
+          );
+        }
         const sessionId = sessionIdRef.current;
         if (!event.final || !content || !sessionId) return;
         transcriptSequenceRef.current += 1;
@@ -183,6 +204,7 @@ export function useLiveConversation() {
         if (event.role === 'user') userTurnStartedAtRef.current = undefined;
         flushTranscript().catch(() => {});
       }),
+      provider.onVocabulary(highlight => setVocabulary(highlight)),
       provider.onInterruption(() => {
         liveAudioService.clearPlayback();
         bargeInGateRef.current.setAiSpeaking(false);
@@ -225,6 +247,7 @@ export function useLiveConversation() {
         token: liveToken.token,
         model: liveToken.model,
         systemInstruction: liveToken.sessionConfig.systemInstruction,
+        tools: liveToken.sessionConfig.tools,
         resumeHandle: isReconnect ? provider.getResumeHandle() : undefined,
       });
       if (!activeRef.current || providerRef.current !== provider) return;
@@ -297,6 +320,11 @@ export function useLiveConversation() {
       reconnectAttemptRef.current = 0;
       setError(undefined);
       setTutor(undefined);
+      setAssistantTranscript('');
+      setVocabulary(undefined);
+      setHistory([]);
+      setFilterBypassed(false);
+      transcriptLineRef.current = 0;
       analysisPollGenerationRef.current += 1;
       setAnalysis(undefined);
       setAnalysisLoading(false);
@@ -394,13 +422,14 @@ export function useLiveConversation() {
     });
     const activity = liveAudioService.onActivity(speaking => {
       if (!activeRef.current || !transportReadyRef.current) return;
+      if (speaking) providerRef.current?.startAudioActivity();
       bargeInGateRef.current
         .handleActivity(speaking)
         .forEach(chunk => providerRef.current?.sendAudio(chunk));
       // The native speaker gate stops sending PCM at the end of an accepted
       // turn. Tell Gemini the stream ended instead of waiting for silence
       // frames that the gate will never send.
-      if (!speaking) providerRef.current?.endAudioStream();
+      if (!speaking) providerRef.current?.endAudioActivity();
       if (speaking && !userTurnStartedAtRef.current) {
         userTurnStartedAtRef.current = new Date().toISOString();
       }
@@ -414,12 +443,31 @@ export function useLiveConversation() {
       setError(nextError.message);
       updateStatus('error');
     });
+    const filterBypassedEvent = liveAudioService.onFilterBypassed(() => {
+      setFilterBypassed(true);
+    });
     return () => {
       chunks.remove();
       activity.remove();
       nativeError.remove();
+      filterBypassedEvent.remove();
     };
   }, [updateStatus]);
+
+  useEffect(() => {
+    if (status !== 'thinking') return;
+    const timeout = setTimeout(() => {
+      if (!activeRef.current || statusRef.current !== 'thinking') return;
+      debugLiveError(
+        'thinking timeout',
+        new Error('Gemini did not complete the turn; reconnecting'),
+      );
+      liveAudioService.clearPlayback();
+      bargeInGateRef.current.reset();
+      providerRef.current?.recoverFromStalledTurn();
+    }, THINKING_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [status]);
 
   useEffect(() => {
     if (!commuteAudio.available) return;
@@ -437,7 +485,7 @@ export function useLiveConversation() {
         transportReadyRef.current = false;
         if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = undefined;
-        providerRef.current?.endAudioStream();
+        providerRef.current?.endAudioActivity();
         providerRef.current?.disconnect().catch(() => {});
         liveAudioService.stopCapture().catch(() => {});
         liveAudioService.clearPlayback();
@@ -466,6 +514,7 @@ export function useLiveConversation() {
       audioRestartRef.current = audioRestartRef.current
         .then(async () => {
           if (!activeRef.current || !transportReadyRef.current) return;
+          providerRef.current?.endAudioActivity();
           liveAudioService.clearPlayback();
           bargeInGateRef.current.reset();
           await liveAudioService.stopCapture();
@@ -533,7 +582,7 @@ export function useLiveConversation() {
             updateStatus('error');
           });
       } else {
-        providerRef.current?.endAudioStream();
+        providerRef.current?.endAudioActivity();
         liveAudioService.stopCapture().catch(() => {});
         liveAudioService.clearPlayback();
         bargeInGateRef.current.reset();
@@ -563,6 +612,10 @@ export function useLiveConversation() {
     status,
     error,
     latestTranscript,
+    assistantTranscript,
+    vocabulary,
+    history,
+    filterBypassed,
     audioRoute,
     tutor,
     analysis,

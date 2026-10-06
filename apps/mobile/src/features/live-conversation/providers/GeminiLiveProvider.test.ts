@@ -112,11 +112,7 @@ describe('GeminiLiveProvider', () => {
           activityHandling: 'START_OF_ACTIVITY_INTERRUPTS',
           turnCoverage: 'TURN_INCLUDES_ONLY_ACTIVITY',
           automaticActivityDetection: {
-            disabled: false,
-            startOfSpeechSensitivity: 'START_SENSITIVITY_LOW',
-            endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
-            prefixPaddingMs: 160,
-            silenceDurationMs: 800,
+            disabled: true,
           },
         },
         contextWindowCompression: { slidingWindow: {} },
@@ -128,15 +124,26 @@ describe('GeminiLiveProvider', () => {
       mimeType: 'audio/pcm;rate=16000',
     });
     expect(socket.sent).toHaveLength(1);
+    expect(JSON.parse(socket.sent[0]).setup).not.toHaveProperty('tools');
 
     socket.binaryMessage({ setupComplete: {} });
     await connected;
-    provider.sendAudio({ data: 'cGNt', mimeType: 'audio/pcm;rate=16000' });
+    provider.startAudioActivity();
     expect(JSON.parse(socket.sent[1])).toEqual({
+      realtimeInput: { activityStart: {} },
+    });
+    provider.sendAudio({ data: 'cGNt', mimeType: 'audio/pcm;rate=16000' });
+    expect(JSON.parse(socket.sent[2])).toEqual({
       realtimeInput: {
         audio: { data: 'cGNt', mimeType: 'audio/pcm;rate=16000' },
       },
     });
+    provider.endAudioActivity();
+    expect(JSON.parse(socket.sent[3])).toEqual({
+      realtimeInput: { activityEnd: {} },
+    });
+    provider.endAudioActivity();
+    expect(socket.sent).toHaveLength(4);
   });
 
   it('emits audio and clears playback through the interruption boundary', async () => {
@@ -201,6 +208,90 @@ describe('GeminiLiveProvider', () => {
       role: 'assistant',
       text: 'Hello there.',
       final: true,
+    });
+  });
+
+  it('declares tools in setup and answers a vocabulary tool call', async () => {
+    const provider = new GeminiLiveProvider();
+    const vocabulary = jest.fn();
+    provider.onVocabulary(vocabulary);
+    const connected = provider.connect({
+      token: 'token',
+      model: 'model',
+      systemInstruction: 'Tutor policy',
+      tools: [
+        {
+          functionDeclarations: [
+            { name: 'show_vocabulary', description: 'Show a word.' },
+          ],
+        },
+      ],
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    expect(JSON.parse(socket.sent[0])).toMatchObject({
+      setup: {
+        tools: [{ functionDeclarations: [{ name: 'show_vocabulary' }] }],
+      },
+    });
+    socket.message({ setupComplete: {} });
+    await connected;
+
+    socket.message({
+      toolCall: {
+        functionCalls: [
+          {
+            id: 'fc_1',
+            name: 'show_vocabulary',
+            args: {
+              term: 'get off work',
+              meaningVi: 'tan làm',
+              example: 'I get off work at 5 PM.',
+            },
+          },
+        ],
+      },
+    });
+
+    expect(vocabulary).toHaveBeenCalledWith({
+      term: 'get off work',
+      meaningVi: 'tan làm',
+      example: 'I get off work at 5 PM.',
+    });
+    expect(JSON.parse(socket.sent[socket.sent.length - 1])).toEqual({
+      toolResponse: {
+        functionResponses: [
+          { id: 'fc_1', name: 'show_vocabulary', response: { result: 'ok' } },
+        ],
+      },
+    });
+  });
+
+  it('answers an unrecognized tool call so the turn is never left open', async () => {
+    const provider = new GeminiLiveProvider();
+    const vocabulary = jest.fn();
+    provider.onVocabulary(vocabulary);
+    const connected = provider.connect({
+      token: 'token',
+      model: 'model',
+      systemInstruction: 'Tutor policy',
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.message({ setupComplete: {} });
+    await connected;
+
+    socket.message({
+      toolCall: { functionCalls: [{ id: 'fc_9', name: 'some_other_tool' }] },
+    });
+
+    expect(vocabulary).not.toHaveBeenCalled();
+    expect(JSON.parse(socket.sent[socket.sent.length - 1])).toEqual({
+      toolResponse: {
+        functionResponses: [
+          { id: 'fc_9', name: 'some_other_tool', response: { result: 'ok' } },
+        ],
+      },
     });
   });
 

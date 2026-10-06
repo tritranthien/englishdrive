@@ -49,6 +49,25 @@ const conversationModes: Array<{
   { value: 'PRONUNCIATION_PRACTICE', label: 'Pronunciation' },
 ];
 
+const voiceEnrollmentScript =
+  'Xin chào, hôm nay tôi muốn trò chuyện bằng tiếng Việt. Please speak slowly and help me practice English when I ask. Tôi đang trên đường đi làm và muốn nói chuyện thật tự nhiên. Hãy giải thích rõ ràng và tiếp tục câu chuyện nhé.';
+
+function HighlightedCaption({ text, term }: { text: string; term?: string }) {
+  const index = term ? text.toLowerCase().indexOf(term.toLowerCase()) : -1;
+  if (!term || index < 0) {
+    return <Text style={styles.captionText}>{text}</Text>;
+  }
+  return (
+    <Text style={styles.captionText}>
+      {text.slice(0, index)}
+      <Text style={styles.captionHighlight}>
+        {text.slice(index, index + term.length)}
+      </Text>
+      {text.slice(index + term.length)}
+    </Text>
+  );
+}
+
 function ReportSection({
   title,
   children,
@@ -125,8 +144,21 @@ function AppContent() {
   const [authLoading, setAuthLoading] = useState(false);
   const [conversationMode, setConversationMode] =
     useState<ConversationMode>('FREE_CONVERSATION');
+  const [historyOpen, setHistoryOpen] = useState(false);
   const realtime = useLiveConversation();
   const speakerVerification = useSpeakerVerification();
+  const liveAudioProfileKind =
+    realtime.audioRoute.type === 'bluetooth' ||
+    realtime.audioRoute.type === 'wired'
+      ? 'headset'
+      : 'phone';
+  const currentVoiceProfileKind = realtime.isActive
+    ? liveAudioProfileKind
+    : (speakerVerification.status?.currentRouteKind ?? liveAudioProfileKind);
+  const currentVoiceProfileEnrolled =
+    currentVoiceProfileKind === 'headset'
+      ? speakerVerification.status?.headsetEnrolled
+      : speakerVerification.status?.phoneEnrolled;
   const [assistantStatus, setAssistantStatus] = useState<AssistantStatus>();
   const [assistantError, setAssistantError] = useState<string>();
   const realtimeStart = realtime.start;
@@ -321,9 +353,7 @@ function AppContent() {
   }
 
   const isActive = realtime.isActive;
-  const voiceEnrollmentRequired =
-    speakerVerification.status?.configured === true &&
-    !speakerVerification.status.enrolled;
+  const isEnrolling = speakerVerification.status?.enrolling === true;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -387,56 +417,100 @@ function AppContent() {
               : !speakerVerification.status.configured
                 ? 'The bundled open-source speaker model is unavailable. Rebuild the app.'
                 : speakerVerification.status.enrolling
-                  ? `Keep speaking naturally in a quiet place. ${speakerVerification.progress}% complete.`
-                  : speakerVerification.status.enrolled
-                    ? 'Active. Only audio matching your enrolled voice is sent to Gemini.'
-                    : 'Enroll your voice once before starting a filtered conversation.'}
+                  ? `Enrolling ${speakerVerification.status.enrollingKind ?? 'voice'} profile. Keep speaking naturally. ${speakerVerification.progress}% complete.`
+                  : currentVoiceProfileEnrolled
+                    ? `Active for ${currentVoiceProfileKind} microphone. Only matching voice is sent to Gemini.`
+                    : `Voice filter off for ${currentVoiceProfileKind} microphone. Conversation remains available until this profile is enrolled.`}
           </Text>
+          {speakerVerification.status?.enrolling ? (
+            <View style={styles.enrollmentScript}>
+              <Text style={styles.enrollmentScriptTitle}>
+                ĐỌC BẰNG GIỌNG TỰ NHIÊN
+              </Text>
+              <Text style={styles.enrollmentScriptText}>
+                {voiceEnrollmentScript}
+              </Text>
+              <Text style={styles.enrollmentScriptHint}>
+                Nếu chưa đạt 100%, hãy đọc lại từ đầu. Không cần đọc nhanh.
+              </Text>
+            </View>
+          ) : null}
+          {speakerVerification.status?.needsReenrollment ? (
+            <Text style={styles.profileWarning}>
+              Your old single-microphone profile must be enrolled again.
+            </Text>
+          ) : null}
           {speakerVerification.error ? (
             <Text style={styles.error}>{speakerVerification.error}</Text>
           ) : null}
           {speakerVerification.status?.configured ? (
             <>
-              <Pressable
-                disabled={
+              {(['phone', 'headset'] as const).map(kind => {
+                const enrolled =
+                  kind === 'phone'
+                    ? speakerVerification.status?.phoneEnrolled
+                    : speakerVerification.status?.headsetEnrolled;
+                const selected = currentVoiceProfileKind === kind;
+                const disabled =
                   isActive ||
                   assistantStatus?.wakeArmed ||
-                  speakerVerification.status.enrolling
-                }
-                onPress={speakerVerification.enroll}
-                style={({ pressed }) => [
-                  styles.secondaryButton,
-                  (isActive ||
-                    assistantStatus?.wakeArmed ||
-                    speakerVerification.status?.enrolling) &&
-                    styles.disabledButton,
-                  pressed && styles.buttonPressed,
-                ]}
-              >
-                <Text style={styles.secondaryButtonText}>
-                  {speakerVerification.status.enrolled
-                    ? 'RE-ENROLL MY VOICE'
-                    : 'ENROLL MY VOICE'}
-                </Text>
-              </Pressable>
+                  speakerVerification.status?.enrolling ||
+                  !selected;
+                return (
+                  <View key={kind} style={styles.profileRow}>
+                    <View style={styles.profileHeader}>
+                      <Text style={styles.profileName}>
+                        {kind === 'phone'
+                          ? 'PHONE MICROPHONE'
+                          : 'HEADSET MICROPHONE'}
+                      </Text>
+                      <Text style={styles.profileState}>
+                        {enrolled ? 'ENROLLED' : 'NOT ENROLLED'}
+                        {selected ? ' · CURRENT' : ''}
+                      </Text>
+                    </View>
+                    <Pressable
+                      disabled={disabled}
+                      onPress={() => speakerVerification.enroll(kind)}
+                      style={({ pressed }) => [
+                        styles.secondaryButton,
+                        disabled && styles.disabledButton,
+                        pressed && styles.buttonPressed,
+                      ]}
+                    >
+                      <Text style={styles.secondaryButtonText}>
+                        {enrolled ? 'RE-ENROLL' : 'ENROLL'} {kind.toUpperCase()}
+                      </Text>
+                    </Pressable>
+                    {enrolled ? (
+                      <Pressable
+                        disabled={
+                          isActive || speakerVerification.status?.enrolling
+                        }
+                        onPress={() => speakerVerification.remove(kind)}
+                        style={styles.textButton}
+                      >
+                        <Text
+                          style={[
+                            styles.switchText,
+                            (isActive ||
+                              speakerVerification.status?.enrolling) &&
+                              styles.disabledText,
+                          ]}
+                        >
+                          Reset {kind} profile
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                );
+              })}
               {speakerVerification.status.enrolling ? (
                 <Pressable
                   onPress={speakerVerification.cancel}
                   style={styles.textButton}
                 >
                   <Text style={styles.switchText}>Cancel enrollment</Text>
-                </Pressable>
-              ) : speakerVerification.status.enrolled ? (
-                <Pressable
-                  disabled={isActive}
-                  onPress={speakerVerification.remove}
-                  style={styles.textButton}
-                >
-                  <Text
-                    style={[styles.switchText, isActive && styles.disabledText]}
-                  >
-                    Reset voice profile
-                  </Text>
                 </Pressable>
               ) : null}
             </>
@@ -492,6 +566,78 @@ function AppContent() {
           </Text>
         </View>
 
+        {isActive && realtime.filterBypassed ? (
+          <View style={styles.warningPanel}>
+            <Text style={styles.warningTitle}>VOICE FILTER TURNED OFF</Text>
+            <Text style={styles.warningText}>
+              Your voice did not match the enrolled profile, so this session is
+              sending audio without the filter. Reset the profile and enroll
+              again somewhere quiet.
+            </Text>
+          </View>
+        ) : null}
+
+        {isActive && realtime.assistantTranscript ? (
+          <View style={styles.captionPanel}>
+            <Text style={styles.captionLabel}>TUTOR SAID</Text>
+            <ScrollView
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+              style={styles.captionScroll}
+            >
+              <HighlightedCaption
+                text={realtime.assistantTranscript}
+                term={realtime.vocabulary?.term}
+              />
+            </ScrollView>
+          </View>
+        ) : null}
+
+        {isActive && realtime.vocabulary ? (
+          <View style={styles.vocabularyPanel}>
+            <Text style={styles.captionLabel}>NEW WORD</Text>
+            <Text style={styles.vocabularyTerm}>
+              {realtime.vocabulary.term}
+            </Text>
+            <Text style={styles.vocabularyMeaning}>
+              {realtime.vocabulary.meaningVi}
+            </Text>
+            {realtime.vocabulary.example ? (
+              <Text style={styles.vocabularyExample}>
+                {realtime.vocabulary.example}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {isActive && realtime.history.length > 0 ? (
+          <View style={styles.historyPanel}>
+            <Pressable onPress={() => setHistoryOpen(open => !open)}>
+              <Text style={styles.historyToggle}>
+                {historyOpen
+                  ? 'HIDE EARLIER LINES'
+                  : `SHOW EARLIER LINES (${realtime.history.length})`}
+              </Text>
+            </Pressable>
+            {historyOpen ? (
+              <ScrollView
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={false}
+                style={styles.historyScroll}
+              >
+                {realtime.history.map(line => (
+                  <View key={line.id} style={styles.historyRow}>
+                    <Text style={styles.historyRole}>
+                      {line.role === 'user' ? 'YOU' : 'TUTOR'}
+                    </Text>
+                    <Text style={styles.historyText}>{line.text}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : null}
+          </View>
+        ) : null}
+
         {!isActive && realtime.analysisLoading && !realtime.analysis ? (
           <View style={styles.reportPanel}>
             <ActivityIndicator color="#55ddb6" />
@@ -521,7 +667,7 @@ function AppContent() {
         <View>
           <Pressable
             disabled={
-              realtime.status === 'connecting' || voiceEnrollmentRequired
+              realtime.status === 'connecting' || isEnrolling
             }
             onPress={() =>
               isActive
@@ -531,7 +677,7 @@ function AppContent() {
             style={({ pressed }) => [
               styles.callButton,
               isActive && styles.endButton,
-              voiceEnrollmentRequired && styles.disabledButton,
+              isEnrolling && styles.disabledButton,
               pressed && styles.buttonPressed,
             ]}
           >
@@ -650,6 +796,46 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
   },
   panelText: { color: '#a9b7ca', lineHeight: 21, marginVertical: 10 },
+  enrollmentScript: {
+    backgroundColor: '#0b1727',
+    borderColor: '#365069',
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 12,
+    padding: 14,
+  },
+  enrollmentScriptTitle: {
+    color: '#55ddb6',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  enrollmentScriptText: {
+    color: '#f7fbff',
+    fontSize: 17,
+    lineHeight: 26,
+  },
+  enrollmentScriptHint: {
+    color: '#a9b7ca',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 10,
+  },
+  profileWarning: { color: '#ffd28a', lineHeight: 20, marginBottom: 10 },
+  profileRow: {
+    borderTopColor: '#26394f',
+    borderTopWidth: 1,
+    marginTop: 10,
+    paddingTop: 12,
+  },
+  profileHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  profileName: { color: '#f7fbff', fontSize: 12, fontWeight: '800' },
+  profileState: { color: '#74839a', fontSize: 11, fontWeight: '700' },
   secondaryButton: {
     alignItems: 'center',
     borderColor: '#55ddb6',
@@ -695,6 +881,86 @@ const styles = StyleSheet.create({
     minHeight: 44,
     textAlign: 'center',
   },
+  captionPanel: {
+    backgroundColor: '#111f31',
+    borderColor: '#26394f',
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+  },
+  captionLabel: {
+    color: '#74839a',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    marginBottom: 8,
+  },
+  captionScroll: { maxHeight: 132 },
+  captionText: { color: '#f7fbff', fontSize: 17, lineHeight: 25 },
+  warningPanel: {
+    backgroundColor: '#2a1a12',
+    borderColor: '#ffb4ad',
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+  },
+  warningTitle: {
+    color: '#ffb4ad',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    marginBottom: 6,
+  },
+  warningText: { color: '#f7fbff', fontSize: 15, lineHeight: 22 },
+  captionHighlight: {
+    backgroundColor: '#55ddb6',
+    color: '#07111f',
+    fontWeight: '800',
+  },
+  vocabularyPanel: {
+    backgroundColor: '#111f31',
+    borderColor: '#55ddb6',
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+  },
+  vocabularyTerm: {
+    color: '#55ddb6',
+    fontSize: 24,
+    fontWeight: '900',
+    marginBottom: 6,
+  },
+  vocabularyMeaning: { color: '#f7fbff', fontSize: 16, lineHeight: 23 },
+  vocabularyExample: {
+    color: '#a9b7ca',
+    fontSize: 15,
+    fontStyle: 'italic',
+    lineHeight: 22,
+    marginTop: 8,
+  },
+  historyPanel: {
+    backgroundColor: '#111f31',
+    borderColor: '#26394f',
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+  },
+  historyToggle: {
+    color: '#55ddb6',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+  },
+  historyScroll: { maxHeight: 220, marginTop: 12 },
+  historyRow: { marginBottom: 12 },
+  historyRole: {
+    color: '#74839a',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginBottom: 3,
+  },
+  historyText: { color: '#f7fbff', fontSize: 15, lineHeight: 22 },
   callButton: {
     alignItems: 'center',
     backgroundColor: '#55ddb6',

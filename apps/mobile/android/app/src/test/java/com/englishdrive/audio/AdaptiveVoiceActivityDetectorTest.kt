@@ -21,11 +21,11 @@ class AdaptiveVoiceActivityDetectorTest {
   fun requiresSustainedSpeechAndWaitsForStableSilence() {
     val detector = AdaptiveVoiceActivityDetector()
     repeat(15) { detector.processPcm16(pcm(400)) }
-    repeat(3) { assertNull(detector.processPcm16(pcm(4_000))) }
+    assertNull(detector.processPcm16(pcm(4_000)))
     assertEquals(true, detector.processPcm16(pcm(4_000)))
     assertTrue(detector.isSpeaking)
 
-    repeat(11) { assertNull(detector.processPcm16(pcm(300))) }
+    repeat(19) { assertNull(detector.processPcm16(pcm(300))) }
     assertEquals(false, detector.processPcm16(pcm(300)))
     assertFalse(detector.isSpeaking)
   }

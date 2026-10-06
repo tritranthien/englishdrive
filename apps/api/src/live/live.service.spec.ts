@@ -72,6 +72,13 @@ describe('LiveService', () => {
         systemInstruction: expect.stringContaining(
           'friendly English conversation partner and tutor',
         ),
+        tools: [
+          {
+            functionDeclarations: [
+              expect.objectContaining({ name: 'show_vocabulary' }),
+            ],
+          },
+        ],
       },
       learningContext: { currentFocus: ['past tense'] },
     });

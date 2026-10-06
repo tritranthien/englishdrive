@@ -9,6 +9,7 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.Handler
 import android.os.HandlerThread
@@ -31,14 +32,17 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
   private var audioRecord: AudioRecord? = null
   private var acousticEchoCanceler: AcousticEchoCanceler? = null
   private var noiseSuppressor: NoiseSuppressor? = null
+  private var automaticGainControl: AutomaticGainControl? = null
   private var captureThread: Thread? = null
   @Volatile private var audioTrack: AudioTrack? = null
   private val playbackThread = HandlerThread("englishdrive-live-playback").apply { start() }
   private val playbackHandler = Handler(playbackThread.looper)
   private val playbackLock = Any()
-  private val voiceActivityDetector = AdaptiveVoiceActivityDetector()
+  private var voiceActivityDetector: AudioVoiceActivityDetector? = null
   private var targetSpeakerVerifier: TargetSpeakerVerifier? = null
   private var targetSpeakerGate: TargetSpeakerAudioGate? = null
+  @Volatile private var filterBypassed = false
+  private var rejectedSpeechChunks = 0
 
   override fun getName() = "LiveAudio"
 
@@ -60,19 +64,31 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
     }
 
     try {
-      val hasTargetProfile = SpeakerProfileStore(reactContext).hasProfile()
-      if (!SherpaSpeakerEmbeddingEngine.isAvailable(reactContext)) {
-        error("The bundled speaker verification model is unavailable")
+      val route = SpeakerAudioRouteResolver.current(reactContext)
+      voiceActivityDetector?.close()
+      voiceActivityDetector = StrictVoiceActivityDetector.createOrFallback(reactContext)
+      val hasTargetProfile = SpeakerProfileStore(reactContext).hasProfile(route.kind)
+      val filterAvailable =
+        hasTargetProfile && SherpaSpeakerEmbeddingEngine.isAvailable(reactContext)
+      if (filterAvailable) {
+        targetSpeakerVerifier = TargetSpeakerVerifier.create(reactContext, route.kind)
+        targetSpeakerGate =
+          targetSpeakerVerifier?.let { verifier ->
+            TargetSpeakerAudioGate(
+              score = verifier::score,
+              threshold = verifier.threshold,
+              finishScore = verifier::finishScore,
+            )
+          }
+      } else {
+        targetSpeakerVerifier = null
+        targetSpeakerGate = null
       }
-      if (!hasTargetProfile) {
-        error("Enroll your voice before starting a filtered conversation")
-      }
-      targetSpeakerVerifier = TargetSpeakerVerifier.create(reactContext)
-      targetSpeakerGate =
-        targetSpeakerVerifier?.let { verifier ->
-          TargetSpeakerAudioGate(verifier::score, finishScore = verifier::finishScore)
-        }
-      Log.i(TAG, "Target speaker filter enabled=${targetSpeakerGate != null}")
+      Log.i(
+        TAG,
+        "Target speaker filter enabled=${targetSpeakerGate != null} " +
+          "profile=${route.kind.storageName} route=${route.type}/${route.name}",
+      )
       val minBuffer =
         AudioRecord.getMinBufferSize(
           INPUT_SAMPLE_RATE,
@@ -100,7 +116,9 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       audioRecord = record
       configureCaptureEffects(record)
       captureRunning = true
-      voiceActivityDetector.reset()
+      filterBypassed = false
+      rejectedSpeechChunks = 0
+      voiceActivityDetector?.reset()
       record.startRecording()
       captureThread =
         thread(start = true, name = "englishdrive-live-capture") {
@@ -219,20 +237,53 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       val count = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
       if (count <= 0 || !captureRunning) continue
       val chunk = if (count == buffer.size) buffer else buffer.copyOf(count)
-      val activityChange = voiceActivityDetector.processPcm16(chunk)
+      val detector = voiceActivityDetector ?: continue
+      val activityChange = detector.processPcm16(chunk)
       if (com.englishdrive.BuildConfig.DEBUG && activityChange != null) {
-        Log.d(TAG, "Local speech activity=$activityChange")
+        Log.d(
+          TAG,
+            "Local speech activity=$activityChange rms=${detector.lastRms} " +
+            "threshold=${detector.currentThreshold}",
+        )
       }
       val gate = targetSpeakerGate
-      if (gate == null) {
+      if (gate == null || filterBypassed) {
         emitAudioChunk(chunk)
         activityChange?.let { emit(EVENT_ACTIVITY, it) }
       } else {
         if (activityChange == true) targetSpeakerVerifier?.resetTurn()
-        val result = gate.process(chunk, voiceActivityDetector.isSpeaking, activityChange)
-        if (result.started) emit(EVENT_ACTIVITY, true)
+        val result = gate.process(chunk, detector.isSpeaking, activityChange)
+        if (result.started) {
+          rejectedSpeechChunks = 0
+          emit(EVENT_ACTIVITY, true)
+        } else if (detector.isSpeaking && result.chunks.isEmpty()) {
+          // The learner is clearly speaking but nothing matches the stored
+          // profile. Holding the gate closed here silently mutes the entire
+          // session, so after a sustained run of rejections forward audio again
+          // and tell the app the filter was bypassed.
+          rejectedSpeechChunks += 1
+          if (rejectedSpeechChunks >= FILTER_BYPASS_CHUNKS) {
+            filterBypassed = true
+            rejectedSpeechChunks = 0
+            Log.w(
+              TAG,
+              "Voice filter bypassed after $FILTER_BYPASS_CHUNKS rejected speech chunks " +
+                "profile=${targetSpeakerVerifier?.profileKind?.storageName}",
+            )
+            emit(EVENT_FILTER_BYPASSED, true)
+          }
+        } else if (!detector.isSpeaking) {
+          rejectedSpeechChunks = 0
+        }
         result.chunks.forEach(::emitAudioChunk)
         if (result.activity == false) emit(EVENT_ACTIVITY, false)
+        if (com.englishdrive.BuildConfig.DEBUG && activityChange == false) {
+          Log.d(
+            TAG,
+            "Speaker turn profile=${targetSpeakerVerifier?.profileKind?.storageName} " +
+              "result=${result.reason} confidence=${result.confidence}",
+          )
+        }
       }
     }
   }
@@ -255,7 +306,18 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       createEffect("NS", NoiseSuppressor.isAvailable()) {
         NoiseSuppressor.create(record.audioSessionId)
       }
-    Log.i(TAG, "Capture effects: aec=${acousticEchoCanceler?.enabled == true}, ns=${noiseSuppressor?.enabled == true}")
+    // Quiet utterances produced meaningless speaker embeddings, so normalize the
+    // level here and in enrollment instead of trusting a consistent speaking voice.
+    automaticGainControl =
+      createEffect("AGC", AutomaticGainControl.isAvailable()) {
+        AutomaticGainControl.create(record.audioSessionId)
+      }
+    Log.i(
+      TAG,
+      "Capture effects: aec=${acousticEchoCanceler?.enabled == true}, " +
+        "ns=${noiseSuppressor?.enabled == true}, " +
+        "agc=${automaticGainControl?.enabled == true}",
+    )
   }
 
   private fun <T : android.media.audiofx.AudioEffect> createEffect(
@@ -276,6 +338,8 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun releaseCaptureEffects() {
+    automaticGainControl?.release()
+    automaticGainControl = null
     acousticEchoCanceler?.release()
     acousticEchoCanceler = null
     noiseSuppressor?.release()
@@ -294,8 +358,11 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
     captureThread = null
     releaseCaptureEffects()
     record?.release()
-    if (voiceActivityDetector.isSpeaking) emit(EVENT_ACTIVITY, false)
-    voiceActivityDetector.reset()
+    filterBypassed = false
+    rejectedSpeechChunks = 0
+    if (voiceActivityDetector?.isSpeaking == true) emit(EVENT_ACTIVITY, false)
+    voiceActivityDetector?.close()
+    voiceActivityDetector = null
     targetSpeakerGate?.reset()
     targetSpeakerGate = null
     targetSpeakerVerifier?.close()
@@ -342,5 +409,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
     const val EVENT_CHUNK = "liveAudioChunk"
     const val EVENT_ACTIVITY = "liveAudioActivity"
     const val EVENT_ERROR = "liveAudioError"
+    const val EVENT_FILTER_BYPASSED = "liveAudioFilterBypassed"
+    private const val FILTER_BYPASS_CHUNKS = 125
   }
 }

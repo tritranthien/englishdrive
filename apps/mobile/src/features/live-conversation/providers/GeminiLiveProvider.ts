@@ -4,6 +4,7 @@ import type {
   LiveSessionConfig,
   PcmAudioChunk,
   TranscriptEvent,
+  VocabularyHighlight,
 } from '../types/liveConversation.types';
 
 const GEMINI_LIVE_ENDPOINT =
@@ -16,6 +17,12 @@ type GeminiPart = {
   inline_data?: { data?: string; mime_type?: string };
 };
 
+type GeminiFunctionCall = {
+  id?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+};
+
 type GeminiServerMessage = {
   setupComplete?: object;
   serverContent?: {
@@ -26,6 +33,9 @@ type GeminiServerMessage = {
     interimInputTranscription?: { text?: string };
     outputTranscription?: { text?: string };
     modelTurn?: { parts?: GeminiPart[] };
+  };
+  toolCall?: {
+    functionCalls?: GeminiFunctionCall[];
   };
   sessionResumptionUpdate?: {
     resumable?: boolean;
@@ -104,6 +114,8 @@ export class GeminiLiveProvider implements LiveConversationProvider {
   private socket?: WebSocket;
   private cancelPending?: () => void;
   private setupComplete = false;
+  private inputActivityOpen = false;
+  private audioSinceLastEnd = false;
   private intentionalClose = false;
   private resumeHandle?: string;
   private outputTranscript = '';
@@ -111,6 +123,9 @@ export class GeminiLiveProvider implements LiveConversationProvider {
   private readonly audioHandlers = new Set<(chunk: PcmAudioChunk) => void>();
   private readonly transcriptHandlers = new Set<
     (event: TranscriptEvent) => void
+  >();
+  private readonly vocabularyHandlers = new Set<
+    (highlight: VocabularyHighlight) => void
   >();
   private readonly interruptionHandlers = new Set<() => void>();
   private readonly stateHandlers = new Set<
@@ -130,6 +145,7 @@ export class GeminiLiveProvider implements LiveConversationProvider {
     }
     this.intentionalClose = false;
     this.setupComplete = false;
+    this.resetAudioActivity();
     this.outputTranscript = '';
     this.messageQueue = Promise.resolve();
     this.emitState('connecting');
@@ -192,15 +208,12 @@ export class GeminiLiveProvider implements LiveConversationProvider {
                 activityHandling: 'START_OF_ACTIVITY_INTERRUPTS',
                 turnCoverage: 'TURN_INCLUDES_ONLY_ACTIVITY',
                 automaticActivityDetection: {
-                  disabled: false,
-                  startOfSpeechSensitivity: 'START_SENSITIVITY_LOW',
-                  endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
-                  prefixPaddingMs: 160,
-                  silenceDurationMs: 800,
+                  disabled: true,
                 },
               },
               inputAudioTranscription: {},
               outputAudioTranscription: {},
+              ...(config.tools?.length ? { tools: config.tools } : {}),
               contextWindowCompression: { slidingWindow: {} },
               sessionResumption: config.resumeHandle
                 ? { handle: config.resumeHandle }
@@ -288,6 +301,7 @@ export class GeminiLiveProvider implements LiveConversationProvider {
         clearTimeout(timeout);
         this.flushOutputTranscript();
         this.setupComplete = false;
+        this.resetAudioActivity();
         if (!settled) {
           settled = true;
           reject(new Error('Gemini Live closed before setup completed'));
@@ -300,6 +314,7 @@ export class GeminiLiveProvider implements LiveConversationProvider {
   sendAudio(chunk: PcmAudioChunk) {
     if (!this.setupComplete || this.socket?.readyState !== WebSocket.OPEN)
       return;
+    this.audioSinceLastEnd = true;
     this.socket.send(
       JSON.stringify({
         realtimeInput: {
@@ -309,12 +324,54 @@ export class GeminiLiveProvider implements LiveConversationProvider {
     );
   }
 
-  endAudioStream() {
+  startAudioActivity() {
+    if (
+      this.inputActivityOpen ||
+      !this.setupComplete ||
+      this.socket?.readyState !== WebSocket.OPEN
+    )
+      return;
+    this.inputActivityOpen = true;
+    debugEvent('activity start');
+    this.socket.send(
+      JSON.stringify({ realtimeInput: { activityStart: {} } }),
+    );
+  }
+
+  endAudioActivity() {
+    if (
+      !this.inputActivityOpen ||
+      !this.setupComplete ||
+      this.socket?.readyState !== WebSocket.OPEN
+    )
+      return;
+    this.inputActivityOpen = false;
+    this.audioSinceLastEnd = false;
+    debugEvent('activity end');
+    this.socket.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+  }
+
+  private resetAudioActivity() {
+    this.inputActivityOpen = false;
+    this.audioSinceLastEnd = false;
+  }
+
+  private endOpenAudioActivity() {
     if (!this.setupComplete || this.socket?.readyState !== WebSocket.OPEN)
       return;
-    this.socket.send(
-      JSON.stringify({ realtimeInput: { audioStreamEnd: true } }),
-    );
+    this.endAudioActivity();
+  }
+
+  recoverFromStalledTurn() {
+    const socket = this.socket;
+    if (!this.setupComplete || socket?.readyState !== WebSocket.OPEN) return;
+    debugEvent('thinking timeout; reconnecting transport');
+    // A resumable handle can preserve the same server-side turn that stopped
+    // producing output. Reconnect with a fresh Gemini transport while the app
+    // keeps the logical learning session and its persisted transcript.
+    this.resumeHandle = undefined;
+    this.intentionalClose = false;
+    socket.close(1012, 'Stalled Gemini turn');
   }
 
   interrupt() {
@@ -327,13 +384,14 @@ export class GeminiLiveProvider implements LiveConversationProvider {
     this.flushOutputTranscript();
     const socket = this.socket;
     if (socket?.readyState === WebSocket.OPEN) {
-      this.endAudioStream();
+      this.endOpenAudioActivity();
       socket.close(1000, 'Session ended');
     } else if (socket?.readyState === WebSocket.CONNECTING) {
       socket.close();
     }
     this.socket = undefined;
     this.setupComplete = false;
+    this.resetAudioActivity();
     this.emitState('disconnected');
   }
 
@@ -349,6 +407,11 @@ export class GeminiLiveProvider implements LiveConversationProvider {
   onTranscript(handler: (event: TranscriptEvent) => void) {
     this.transcriptHandlers.add(handler);
     return () => this.transcriptHandlers.delete(handler);
+  }
+
+  onVocabulary(handler: (highlight: VocabularyHighlight) => void) {
+    this.vocabularyHandlers.add(handler);
+    return () => this.vocabularyHandlers.delete(handler);
   }
 
   onInterruption(handler: () => void) {
@@ -375,9 +438,11 @@ export class GeminiLiveProvider implements LiveConversationProvider {
       this.socket?.close(1012, 'Gemini requested reconnect');
     }
 
+    if (message.toolCall) this.handleToolCall(message.toolCall);
     const content = message.serverContent;
     if (!content) return;
     if (content.outputTranscription?.text) {
+      debugEvent('output transcription');
       const next = content.outputTranscription.text;
       if (next.startsWith(this.outputTranscript)) {
         this.outputTranscript = next;
@@ -406,6 +471,7 @@ export class GeminiLiveProvider implements LiveConversationProvider {
       this.emitState('user-speaking');
     }
     if (content.inputTranscription?.text) {
+      debugEvent('input transcription', content.inputTranscription.text);
       this.emitTranscript({
         role: 'user',
         text: content.inputTranscription.text,
@@ -420,6 +486,7 @@ export class GeminiLiveProvider implements LiveConversationProvider {
         part.inline_data?.mime_type ??
         'audio/pcm;rate=24000';
       if (data) {
+        debugEvent('model audio');
         this.emitState('ai-speaking');
         this.audioHandlers.forEach(handler => handler({ data, mimeType }));
       }
@@ -427,7 +494,45 @@ export class GeminiLiveProvider implements LiveConversationProvider {
     if (content.generationComplete || content.turnComplete) {
       this.flushOutputTranscript();
     }
-    if (content.turnComplete) this.emitState('listening');
+    if (content.turnComplete) {
+      debugEvent('turn complete');
+      this.emitState('listening');
+    }
+  }
+
+  private handleToolCall(
+    toolCall: NonNullable<GeminiServerMessage['toolCall']>,
+  ) {
+    const calls = toolCall.functionCalls ?? [];
+    calls.forEach(call => {
+      if (call.name !== 'show_vocabulary') return;
+      const args = call.args ?? {};
+      const term = typeof args.term === 'string' ? args.term.trim() : '';
+      const meaningVi =
+        typeof args.meaningVi === 'string' ? args.meaningVi.trim() : '';
+      if (!term || !meaningVi) return;
+      debugEvent('vocabulary highlight', term);
+      const highlight: VocabularyHighlight = { term, meaningVi };
+      const example =
+        typeof args.example === 'string' ? args.example.trim() : '';
+      if (example) highlight.example = example;
+      this.vocabularyHandlers.forEach(handler => handler(highlight));
+    });
+    // Gemini keeps the turn open until every tool call is answered, so reply
+    // even for a call this client does not render.
+    if (calls.length === 0) return;
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(
+      JSON.stringify({
+        toolResponse: {
+          functionResponses: calls.map(call => ({
+            id: call.id,
+            name: call.name,
+            response: { result: 'ok' },
+          })),
+        },
+      }),
+    );
   }
 
   private flushOutputTranscript() {

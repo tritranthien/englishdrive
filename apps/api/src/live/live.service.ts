@@ -16,6 +16,38 @@ const GEMINI_AUTH_TOKENS_URL =
 const TOKEN_LIFETIME_MS = 2 * 60 * 60 * 1000;
 const NEW_SESSION_LIFETIME_MS = 60 * 1000;
 
+// The learner screen shows whatever the tutor calls this function with, so the
+// declaration stays server-side and travels to the device with the live token.
+const GEMINI_LIVE_TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: 'show_vocabulary',
+        description:
+          'Show an English word or phrase on the learner screen together with a short Vietnamese meaning. Call this every time you teach, translate, or explain a word or phrase.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            term: {
+              type: 'STRING',
+              description: 'The exact English word or phrase you just said.',
+            },
+            meaningVi: {
+              type: 'STRING',
+              description: 'Short Vietnamese meaning of the term.',
+            },
+            example: {
+              type: 'STRING',
+              description: 'One short English example sentence.',
+            },
+          },
+          required: ['term', 'meaningVi'],
+        },
+      },
+    ],
+  },
+];
+
 @Injectable()
 export class LiveService {
   constructor(
@@ -102,6 +134,7 @@ export class LiveService {
       learningContext,
       sessionConfig: {
         systemInstruction: tutorPolicy.instructions,
+        tools: GEMINI_LIVE_TOOLS,
       },
     };
   }

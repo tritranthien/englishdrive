@@ -36,7 +36,7 @@ internal class SherpaSpeakerEmbeddingEngine(context: Context) {
   companion object {
     const val SAMPLE_RATE = 16_000
     const val MODEL_ASSET = "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
-    private const val MIN_SAMPLE_BYTES = SAMPLE_RATE * 2
+    const val MIN_SAMPLE_BYTES = SAMPLE_RATE * 2
 
     fun isAvailable(context: Context): Boolean =
       try {

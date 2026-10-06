@@ -50,17 +50,26 @@ describe('TutorPolicyService', () => {
     (languageMode) => {
       const policy = service.build(profile({ languageMode }), 'ROLE_PLAY');
       expect(policy.instructions).toContain(
-        'explicit language request overrides',
+        'FINAL LANGUAGE OVERRIDE',
       );
       expect(policy.instructions).toContain(
-        'keep speaking Vietnamese for the rest of this session',
+        'very next response must begin immediately in Vietnamese',
       );
       expect(policy.instructions).toContain(
-        'until they explicitly request another language',
+        'until the learner explicitly asks to switch back to English',
       );
       expect(policy.instructions).not.toContain(
         'If the learner speaks Vietnamese, help them express',
       );
     },
   );
+
+  it('keeps Vietnamese active during Free Conversation', () => {
+    const policy = service.build(profile(), 'FREE_CONVERSATION');
+
+    expect(policy.instructions).toContain(
+      'continue the free conversation in Vietnamese',
+    );
+    expect(policy.instructions.trim().endsWith('English.')).toBe(true);
+  });
 });

@@ -29,7 +29,7 @@ class TargetSpeakerAudioGateTest {
   @Test
   fun `preserves every frame when AudioRecord reuses its buffer`() {
     var calls = 0
-    val gate = TargetSpeakerAudioGate(score = { if (++calls == 3) 0.9f else null })
+    val gate = TargetSpeakerAudioGate(score = { if (++calls >= 2) 0.9f else 0.1f })
     val buffer = byteArrayOf(1)
     gate.process(buffer, true, true)
     buffer[0] = 2
@@ -44,8 +44,8 @@ class TargetSpeakerAudioGateTest {
   }
   @Test
   fun `holds pre-roll until target speaker is verified`() {
-    val scores = ArrayDeque(listOf(0.8f, 0.9f))
-    val gate = TargetSpeakerAudioGate(score = { scores.removeFirst() }, requiredHits = 2)
+    val scores = ArrayDeque(listOf(0.38f, 0.39f))
+    val gate = TargetSpeakerAudioGate(score = { scores.removeFirst() })
     val quiet = byteArrayOf(1)
     val firstSpeech = byteArrayOf(2)
     val secondSpeech = byteArrayOf(3)
@@ -74,23 +74,59 @@ class TargetSpeakerAudioGateTest {
   }
 
   @Test
-  fun `locks out a rejected turn until silence`() {
+  fun `keeps evaluating a turn instead of locking it out early`() {
     var score = 0.1f
     val gate =
       TargetSpeakerAudioGate(
         score = { score },
-        requiredHits = 1,
         maxPendingChunks = 2,
       )
 
     gate.process(byteArrayOf(1), speaking = true, activityChange = true)
     gate.process(byteArrayOf(2), speaking = true, activityChange = null)
     score = 0.9f
-    val lateMatch = gate.process(byteArrayOf(3), speaking = true, activityChange = null)
+    gate.process(byteArrayOf(3), speaking = true, activityChange = null)
+    val lateMatch = gate.process(byteArrayOf(4), speaking = true, activityChange = null)
 
-    assertTrue(lateMatch.chunks.isEmpty())
-    assertNull(lateMatch.activity)
-    val ended = gate.process(byteArrayOf(4), speaking = false, activityChange = false)
-    assertFalse(ended.activity == true)
+    assertFalse(lateMatch.chunks.isEmpty())
+    assertEquals(true, lateMatch.activity)
+    val ended = gate.process(byteArrayOf(5), speaking = false, activityChange = false)
+    assertEquals(false, ended.activity)
+  }
+
+  @Test
+  fun `uses continuity margin for the next nearby turn`() {
+    var now = 1_000L
+    var score = 0.5f
+    val gate =
+      TargetSpeakerAudioGate(
+        score = { score },
+        threshold = 0.38f,
+        clockMillis = { now },
+      )
+
+    gate.process(byteArrayOf(1), speaking = true, activityChange = true)
+    val first = gate.process(byteArrayOf(2), speaking = true, activityChange = null)
+    assertTrue(first.started)
+    gate.process(byteArrayOf(3), speaking = false, activityChange = false)
+
+    now += 2_000
+    score = 0.37f
+    gate.process(byteArrayOf(4), speaking = true, activityChange = true)
+    val accepted = gate.process(byteArrayOf(5), speaking = true, activityChange = null)
+    assertTrue(accepted.started)
+  }
+
+  @Test
+  fun `does not open for one isolated high speaker score`() {
+    val scores = ArrayDeque(listOf(0.9f, 0.1f, 0.1f))
+    val gate = TargetSpeakerAudioGate(score = { scores.removeFirst() })
+
+    assertFalse(gate.process(byteArrayOf(1), true, true).started)
+    assertFalse(gate.process(byteArrayOf(2), true, null).started)
+    val ended = gate.process(byteArrayOf(3), false, false)
+
+    assertFalse(ended.started)
+    assertTrue(ended.chunks.isEmpty())
   }
 }

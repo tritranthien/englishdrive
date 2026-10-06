@@ -53,4 +53,8 @@ export const liveAudioService = {
       );
     });
   },
+  onFilterBypassed(handler: () => void) {
+    const emitter = new NativeEventEmitter(requireModule());
+    return emitter.addListener('liveAudioFilterBypassed', () => handler());
+  },
 };

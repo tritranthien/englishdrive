@@ -2,15 +2,21 @@ import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 export type SpeakerVerificationStatus = {
   configured: boolean;
-  enrolled: boolean;
+  phoneEnrolled: boolean;
+  headsetEnrolled: boolean;
+  needsReenrollment: boolean;
   enrolling: boolean;
+  enrollingKind?: SpeakerProfileKind;
+  currentRouteKind: SpeakerProfileKind;
 };
+
+export type SpeakerProfileKind = 'phone' | 'headset';
 
 type SpeakerVerificationNativeModule = {
   getStatus(): Promise<SpeakerVerificationStatus>;
-  startEnrollment(): Promise<SpeakerVerificationStatus>;
+  startEnrollment(kind: SpeakerProfileKind): Promise<SpeakerVerificationStatus>;
   cancelEnrollment(): Promise<SpeakerVerificationStatus>;
-  deleteProfile(): Promise<SpeakerVerificationStatus>;
+  deleteProfile(kind: SpeakerProfileKind): Promise<SpeakerVerificationStatus>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 };
@@ -29,9 +35,11 @@ function requireModule() {
 export const speakerVerificationService = {
   available: Platform.OS === 'android' && nativeModule !== undefined,
   getStatus: () => requireModule().getStatus(),
-  startEnrollment: () => requireModule().startEnrollment(),
+  startEnrollment: (kind: SpeakerProfileKind) =>
+    requireModule().startEnrollment(kind),
   cancelEnrollment: () => requireModule().cancelEnrollment(),
-  deleteProfile: () => requireModule().deleteProfile(),
+  deleteProfile: (kind: SpeakerProfileKind) =>
+    requireModule().deleteProfile(kind),
   onProgress(handler: (progress: number) => void) {
     const emitter = new NativeEventEmitter(requireModule());
     return emitter.addListener('speakerEnrollmentProgress', (...args) => {
