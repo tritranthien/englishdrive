@@ -55,8 +55,8 @@ systemctl stop englishdrive-deploy.timer    # pause auto deploy
 
 The API initially binds to `127.0.0.1:3000`; PostgreSQL has no public port.
 Configure an HTTPS reverse proxy for your domain before mobile production use.
-For the current IP-only installation, `/etc/englishdrive.env` sets
-`API_BIND_ADDRESS=0.0.0.0`, exposing `http://103.195.238.176:3000` without TLS.
+For IP-only public access, set `API_BIND_ADDRESS=0.0.0.0` in
+`/etc/englishdrive.env`, exposing `http://103.195.238.176:3000` without TLS.
 For local access through the existing SSH alias:
 
 ```bash

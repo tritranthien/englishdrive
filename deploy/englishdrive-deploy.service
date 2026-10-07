@@ -9,4 +9,3 @@ Type=oneshot
 ExecStart=/usr/local/sbin/englishdrive-deploy
 TimeoutStartSec=30min
 UMask=0077
-
