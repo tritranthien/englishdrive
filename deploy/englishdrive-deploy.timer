@@ -1,0 +1,10 @@
+[Unit]
+Description=Check English Drive main every minute
+
+[Timer]
+OnBootSec=60s
+OnUnitInactiveSec=60s
+Unit=englishdrive-deploy.service
+
+[Install]
+WantedBy=timers.target

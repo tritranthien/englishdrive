@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/coverage
+**/.env
+**/.env.*
+**/*.tsbuildinfo
+.git
+.tmp
+.runtime
+.android-cli
+.android-user-home
+.gradle-user-home
+apps/mobile
+third_party
+**/*.log
+
