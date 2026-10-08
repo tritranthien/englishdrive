@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>English Drive · Quản trị</title>
+    <link rel="stylesheet" href="/admin/style.css" />
+    <script src="/admin/app.js" defer></script>
+  </head>
+  <body>
+    <section id="login" class="login" hidden>
+      <form id="login-form" class="login-card">
+        <div class="brand-icon">ED</div>
+        <p class="eyebrow">ENGLISH DRIVE / ADMIN</p>
+        <h1>Chào mừng trở lại.</h1>
+        <p class="muted">Đăng nhập để theo dõi hoạt động học tập.</p>
+        <label for="password">Mật khẩu quản trị</label
+        ><input
+          id="password"
+          type="password"
+          autocomplete="current-password"
+          required
+          maxlength="128"
+        /><button type="submit" class="primary">Đăng nhập →</button>
+        <p id="login-error" role="alert"></p>
+      </form>
+    </section>
+    <div id="dashboard" class="shell" hidden>
+      <aside>
+        <a class="brand" href="/admin"
+          ><span class="brand-icon">ED</span
+          ><span>English Drive<small>QUẢN TRỊ BACKEND</small></span></a
+        >
+        <p class="nav-label">KHÔNG GIAN QUẢN TRỊ</p>
+        <nav aria-label="Điều hướng">
+          <button data-view="overview" class="selected">
+            ◈ &nbsp; Tổng quan</button
+          ><button data-view="users">◎ &nbsp; Người dùng</button
+          ><button data-view="sessions">▤ &nbsp; Phiên học</button>
+        </nav>
+        <div class="aside-bottom">
+          <span class="live-dot"></span> Kết nối trực tiếp tới backend
+          <p>English Drive · v1.0</p>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <p class="eyebrow">ENGLISH DRIVE / WORKSPACE</p>
+            <h1 id="page-title">Tổng quan</h1>
+          </div>
+          <div class="header-actions">
+            <button id="refresh">↻ Làm mới</button
+            ><button id="logout">Đăng xuất</button>
+          </div>
+        </header>
+        <p id="notice" role="status" class="notice"></p>
+        <div id="content" aria-live="polite"></div>
+        <footer>
+          Dữ liệu được cập nhật khi mở trang hoặc bấm Làm mới. Thời gian hiển
+          thị theo thiết bị.
+        </footer>
+      </main>
+    </div>
+    <dialog id="detail">
+      <div class="dialog-header">
+        <h2>Chi tiết phiên học</h2>
+        <button id="close-detail" aria-label="Đóng">Đóng ✕</button>
+      </div>
+      <div id="detail-content"></div>
+    </dialog>
+  </body>
+</html>

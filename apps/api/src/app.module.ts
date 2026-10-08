@@ -10,6 +10,7 @@ import { UsersModule } from './users/users.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { LiveModule } from './live/live.module.js';
 import { AnalysisModule } from './analysis/analysis.module.js';
+import { AdminModule } from './admin/admin.module.js';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { AnalysisModule } from './analysis/analysis.module.js';
     RealtimeModule,
     LiveModule,
     AnalysisModule,
+    AdminModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],
