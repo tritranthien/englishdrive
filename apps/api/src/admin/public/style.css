@@ -1,3 +1,43 @@
+.key-form {
+  padding: 0 24px 24px;
+}
+.key-form label {
+  display: block;
+  font-size: 13px;
+  margin: 20px 0 10px;
+}
+.key-form input {
+  width: 100%;
+  max-width: 650px;
+}
+.key-form .muted,
+.key-hint {
+  font-size: 12px;
+  color: #758583;
+}
+.key-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.key-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+.key-actions .primary {
+  margin: 0;
+}
+.key-result {
+  font-size: 13px;
+  color: #17664f;
+  min-height: 20px;
+}
+.key-result.error {
+  color: #a74838;
+}
 :root {
   font-family:
     Inter,
@@ -453,6 +493,7 @@ dialog::backdrop {
   }
   nav {
     display: flex;
+    flex-wrap: wrap;
     margin-top: 18px;
   }
   nav button {

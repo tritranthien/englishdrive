@@ -7,6 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model ApiKeySetting {
+  provider       String   @id
+  encryptedValue String
+  updatedAt      DateTime @updatedAt
+}
+
 enum EnglishLevel {
   A1
   A2

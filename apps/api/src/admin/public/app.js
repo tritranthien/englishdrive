@@ -163,6 +163,161 @@ function overview(data) {
   frag.append(server);
   return frag;
 }
+function keySettings(data) {
+  const frag = document.createDocumentFragment();
+  const intro = el(
+    'p',
+    'Cập nhật key cho các yêu cầu mới ngay sau khi lưu. Không cần khởi động lại server hoặc build lại APK.',
+    'muted',
+  );
+  frag.append(intro);
+  if (
+    location.protocol === 'http:' &&
+    !['localhost', '127.0.0.1'].includes(location.hostname)
+  ) {
+    frag.append(
+      el(
+        'p',
+        'Trang hiện dùng HTTP, chưa mã hóa đường truyền. Có thể mở qua SSH tunnel khi nhập key.',
+        'notice',
+      ),
+    );
+  }
+  if (!data.writable)
+    frag.append(
+      el('p', 'Chưa thể lưu: server chưa cấu hình khóa mã hóa.', 'notice'),
+    );
+  data.providers.forEach((item) => {
+    const name = item.provider === 'gemini' ? 'Gemini' : 'OpenAI';
+    const box = panel(
+      name + ' API key',
+      item.provider === 'gemini'
+        ? 'Hội thoại Gemini Live và phân tích sau phiên học'
+        : 'Dịch vụ OpenAI Realtime',
+    );
+    const form = el('form', undefined, 'key-form');
+    const meta = el('div', undefined, 'key-meta');
+    meta.append(
+      badge(item.configured ? 'COMPLETED' : null),
+      el(
+        'span',
+        item.configured ? 'Key đã được cấu hình ••••••••' : 'Chưa có API key',
+      ),
+    );
+    // Use provider-specific status labels instead of session labels.
+    meta.firstChild.textContent = item.configured
+      ? 'Đã cấu hình'
+      : 'Chưa cấu hình';
+    form.append(
+      meta,
+      el(
+        'p',
+        'Nguồn: ' +
+          (item.source === 'dashboard' ? 'Dashboard' : 'Cấu hình VPS') +
+          (item.updatedAt ? ' · Cập nhật ' + date(item.updatedAt) : ''),
+        'muted',
+      ),
+    );
+    const label = el('label', name + ' API key mới');
+    label.htmlFor = 'key-' + item.provider;
+    const input = el('input');
+    input.id = label.htmlFor;
+    input.type = 'password';
+    input.autocomplete = 'new-password';
+    input.spellcheck = false;
+    input.minLength = 20;
+    input.maxLength = 512;
+    input.required = true;
+    input.placeholder = 'Nhập key mới để thay thế';
+    input.disabled = !data.writable;
+    const hint = el(
+      'p',
+      'Key đã lưu không được hiển thị lại. Để trống nếu không muốn thay đổi.',
+      'key-hint',
+    );
+    const actions = el('div', undefined, 'key-actions');
+    const save = el('button', 'Lưu ' + name + ' key', 'primary');
+    save.disabled = !data.writable;
+    const test = el('button', 'Kiểm tra key đang dùng');
+    test.type = 'button';
+    test.disabled = !item.configured;
+    const reset = el('button', 'Dùng lại cấu hình VPS');
+    reset.type = 'button';
+    reset.disabled = item.source !== 'dashboard';
+    const message = el('p', '', 'key-result');
+    message.setAttribute('role', 'status');
+    const busy = (value) => {
+      input.disabled = value || !data.writable;
+      save.disabled = value || !data.writable;
+      test.disabled = value || !item.configured;
+      reset.disabled = value || item.source !== 'dashboard';
+    };
+    const apply = (result) => {
+      if (state.view === 'keys' && !$('dashboard').hidden) {
+        $('content').replaceChildren(keySettings(result));
+        $('notice').textContent =
+          'Đã cập nhật cấu hình ' +
+          name +
+          '. Các yêu cầu mới sẽ dùng key hiện tại.';
+      }
+    };
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      busy(true);
+      message.textContent = 'Đang lưu…';
+      try {
+        const result = await api('api/keys', {
+          provider: item.provider,
+          key: input.value.trim(),
+        });
+        input.value = '';
+        apply(result);
+      } catch (error) {
+        message.textContent = error.message;
+      } finally {
+        busy(false);
+      }
+    };
+    test.onclick = async () => {
+      busy(true);
+      message.textContent = 'Đang kiểm tra kết nối…';
+      try {
+        const result = await api('api/keys/test', { provider: item.provider });
+        message.textContent = result.message;
+        message.classList.toggle('error', !result.ok);
+      } catch (error) {
+        message.textContent = error.message;
+      } finally {
+        busy(false);
+      }
+    };
+    reset.onclick = async () => {
+      if (
+        !confirm(
+          item.fallbackConfigured
+            ? 'Bỏ key lưu trên dashboard và dùng lại key từ cấu hình VPS?'
+            : 'VPS không có key dự phòng. Thao tác này sẽ tắt kết nối ' +
+                name +
+                '. Tiếp tục?',
+        )
+      )
+        return;
+      busy(true);
+      try {
+        apply(await api('api/keys/reset', { provider: item.provider }));
+      } catch (error) {
+        message.textContent = error.message;
+      } finally {
+        busy(false);
+      }
+    };
+    actions.append(save, test, reset);
+    form.append(label, input, hint, actions, message);
+    box.append(form);
+    frag.append(box);
+  });
+  return frag;
+}
 function listing(data) {
   const p = panel(
     state.view === 'users' ? 'Danh sách người dùng' : 'Lịch sử phiên học',
@@ -235,6 +390,7 @@ async function load() {
   $('refresh').disabled = true;
   $('page-title').textContent = {
     overview: 'Tổng quan',
+    keys: 'Cấu hình API key',
     users: 'Người dùng',
     sessions: 'Phiên học',
   }[state.view];
@@ -247,7 +403,7 @@ async function load() {
     const data = await api(
       'api/' +
         state.view +
-        (state.view === 'overview'
+        (['overview', 'keys'].includes(state.view)
           ? ''
           : '?' +
             new URLSearchParams({
@@ -260,7 +416,11 @@ async function load() {
     $('login').hidden = true;
     $('dashboard').hidden = false;
     $('content').replaceChildren(
-      state.view === 'overview' ? overview(data) : listing(data),
+      state.view === 'overview'
+        ? overview(data)
+        : state.view === 'keys'
+          ? keySettings(data)
+          : listing(data),
     );
     $('notice').textContent = '';
   } catch (error) {

@@ -18,8 +18,22 @@ import { z } from 'zod';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { AdminAuthService } from './admin-auth.service.js';
 import { AdminService } from './admin.service.js';
+import { ApiKeysService } from './api-keys.service.js';
 
 const loginSchema = z.object({ password: z.string().min(1).max(128) });
+const providerSchema = z
+  .object({ provider: z.enum(['gemini', 'openai']) })
+  .strict();
+const keySchema = providerSchema
+  .extend({
+    key: z
+      .string()
+      .trim()
+      .min(20)
+      .max(512)
+      .regex(/^\S+$/, 'Key không được chứa khoảng trắng'),
+  })
+  .strict();
 const querySchema = z.object({
   page: z.coerce.number().int().min(1).max(100_000).default(1),
   search: z.string().trim().max(200).default(''),
@@ -38,6 +52,7 @@ export class AdminController {
   constructor(
     private readonly auth: AdminAuthService,
     private readonly service: AdminService,
+    private readonly keys: ApiKeysService,
   ) {}
 
   @Get()
@@ -89,6 +104,41 @@ export class AdminController {
   @UseGuards(AdminAuthService)
   overview() {
     return this.service.overview();
+  }
+
+  @Get('api/keys')
+  @UseGuards(AdminAuthService)
+  keyStatus() {
+    return this.keys.status();
+  }
+
+  @Post('api/keys')
+  @HttpCode(200)
+  @UseGuards(AdminAuthService)
+  saveKey(
+    @Body(new ZodValidationPipe(keySchema)) input: z.infer<typeof keySchema>,
+  ) {
+    return this.keys.save(input.provider, input.key);
+  }
+
+  @Post('api/keys/reset')
+  @HttpCode(200)
+  @UseGuards(AdminAuthService)
+  resetKey(
+    @Body(new ZodValidationPipe(providerSchema))
+    input: z.infer<typeof providerSchema>,
+  ) {
+    return this.keys.reset(input.provider);
+  }
+
+  @Post('api/keys/test')
+  @HttpCode(200)
+  @UseGuards(AdminAuthService)
+  testKey(
+    @Body(new ZodValidationPipe(providerSchema))
+    input: z.infer<typeof providerSchema>,
+  ) {
+    return this.keys.test(input.provider);
   }
 
   @Get('api/users')

@@ -3,10 +3,12 @@ import type { Request, Response, NextFunction } from 'express';
 import { AdminController } from './admin.controller.js';
 import { AdminAuthService } from './admin-auth.service.js';
 import { AdminService } from './admin.service.js';
+import { ApiKeysService } from './api-keys.service.js';
 
 @Module({
   controllers: [AdminController],
-  providers: [AdminAuthService, AdminService],
+  providers: [AdminAuthService, AdminService, ApiKeysService],
+  exports: [ApiKeysService],
 })
 export class AdminModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
