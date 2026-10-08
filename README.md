@@ -88,6 +88,27 @@ Milestone 1 API routes:
 See [VPS deployment](docs/deployment.md) for automatic deployment from `main`,
 database backups, health checks, logs, and rollback instructions.
 
+## Android test APK
+
+Release builds bundle JavaScript and connect to `http://103.195.238.176:3000`.
+Debug builds continue to use `http://localhost:3000` with ADB reverse. The release
+network security configuration permits HTTP only for the current VPS IP.
+
+With the Android SDK and JDK configured, build the standalone phone APK:
+
+```powershell
+cd apps/mobile/android
+./gradlew.bat :app:assembleRelease '-PreactNativeArchitectures=arm64-v8a,armeabi-v7a'
+```
+
+The output is `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`.
+It supports Android 10+ on ARM phones and does not require Metro. This
+test APK uses the project's debug signing key; set up a private release signing
+key before distributing a production version.
+
+See [speakerphone audio](docs/speakerphone-audio.md) for the 1.1 echo protection
+and the physical-phone validation procedure.
+
 ## Quality commands
 
 ```bash

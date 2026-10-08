@@ -1,4 +1,6 @@
-const API_BASE_URL = 'http://localhost:3000';
+const API_BASE_URL = __DEV__
+  ? 'http://localhost:3000'
+  : 'http://103.195.238.176:3000';
 
 export type AuthResult = {
   accessToken: string;

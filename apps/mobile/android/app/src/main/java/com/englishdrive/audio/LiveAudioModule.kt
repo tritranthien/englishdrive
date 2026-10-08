@@ -43,6 +43,10 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
   private var targetSpeakerGate: TargetSpeakerAudioGate? = null
   @Volatile private var filterBypassed = false
   private var rejectedSpeechChunks = 0
+  private val echoGuard = PlaybackEchoGuard()
+  private var protectSpeakerCapture = false
+  private var suppressingEcho = false
+  private var echoTailChunks = 0
 
   override fun getName() = "LiveAudio"
 
@@ -65,6 +69,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
 
     try {
       val route = SpeakerAudioRouteResolver.current(reactContext)
+      protectSpeakerCapture = route.kind == SpeakerProfileKind.PHONE
       voiceActivityDetector?.close()
       voiceActivityDetector = StrictVoiceActivityDetector.createOrFallback(reactContext)
       val hasTargetProfile = SpeakerProfileStore(reactContext).hasProfile(route.kind)
@@ -109,6 +114,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
           .build()
       if (record.state != AudioRecord.STATE_INITIALIZED) {
         record.release()
+        stopCaptureInternal()
         promise.reject("AUDIO_RECORD_INIT_FAILED", "Could not initialize microphone capture")
         return
       }
@@ -118,6 +124,8 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       captureRunning = true
       filterBypassed = false
       rejectedSpeechChunks = 0
+      suppressingEcho = false
+      echoTailChunks = 0
       voiceActivityDetector?.reset()
       record.startRecording()
       captureThread =
@@ -167,7 +175,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
                 .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                 .build(),
             )
-            .setBufferSizeInBytes(maxOf(minBuffer, OUTPUT_SAMPLE_RATE * 2))
+          .setBufferSizeInBytes(maxOf(minBuffer, OUTPUT_SAMPLE_RATE * 2 / 5))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
         if (track.state != AudioTrack.STATE_INITIALIZED) {
@@ -176,6 +184,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
           return
         }
         audioTrack = track
+        echoGuard.reset()
         track.play()
         promise.resolve(null)
       } catch (error: Exception) {
@@ -199,7 +208,17 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       val track = audioTrack ?: return@post
       if (generation == playbackGeneration) {
         try {
-          track.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING)
+          var offset = 0
+          while (offset < bytes.size && generation == playbackGeneration) {
+            val written = synchronized(playbackLock) {
+              if (generation != playbackGeneration) return@post
+              val count = track.write(bytes, offset, bytes.size - offset, AudioTrack.WRITE_BLOCKING)
+              if (count > 0) echoGuard.append(bytes, offset, count)
+              count
+            }
+            if (written <= 0) break
+            offset += written
+          }
         } catch (_: IllegalStateException) {
         }
       }
@@ -210,12 +229,15 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
   fun clearPlayback() {
     playbackGeneration += 1
     playbackHandler.removeCallbacksAndMessages(null)
-    val track = audioTrack ?: return
-    try {
-      track.pause()
-      track.flush()
-      track.play()
-    } catch (_: IllegalStateException) {
+    synchronized(playbackLock) {
+      val track = audioTrack ?: return
+      try {
+        track.pause()
+        track.flush()
+        echoGuard.reset()
+        track.play()
+      } catch (_: IllegalStateException) {
+      }
     }
   }
 
@@ -238,6 +260,27 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       if (count <= 0 || !captureRunning) continue
       val chunk = if (count == buffer.size) buffer else buffer.copyOf(count)
       val detector = voiceActivityDetector ?: continue
+      val rendered = try {
+        audioTrack?.playbackHeadPosition?.toLong()?.and(0xffffffffL) ?: 0L
+      } catch (_: IllegalStateException) { 0L }
+      val echo = protectSpeakerCapture && echoGuard.isEcho(chunk, rendered)
+      if (echo) echoTailChunks = 2 else echoTailChunks = (echoTailChunks - 1).coerceAtLeast(0)
+      if (echo) {
+        if (!suppressingEcho) {
+          // Never train VAD, speaker embeddings or the bypass counter on AI playback.
+          if (detector.isSpeaking) emit(EVENT_ACTIVITY, false)
+          detector.reset()
+          targetSpeakerGate?.reset()
+          targetSpeakerVerifier?.resetTurn()
+          rejectedSpeechChunks = 0
+          Log.d(TAG, "Residual playback echo suppressed")
+        }
+        suppressingEcho = true
+        continue
+      }
+      // Discard only the first trailing frame; a new independent voice is then evaluated normally.
+      if (suppressingEcho && echoTailChunks > 0) continue
+      suppressingEcho = false
       val activityChange = detector.processPcm16(chunk)
       if (com.englishdrive.BuildConfig.DEBUG && activityChange != null) {
         Log.d(
@@ -360,6 +403,8 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
     record?.release()
     filterBypassed = false
     rejectedSpeechChunks = 0
+    suppressingEcho = false
+    echoTailChunks = 0
     if (voiceActivityDetector?.isSpeaking == true) emit(EVENT_ACTIVITY, false)
     voiceActivityDetector?.close()
     voiceActivityDetector = null
@@ -382,6 +427,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       }
       audioTrack?.release()
       audioTrack = null
+      echoGuard.reset()
     }
   }
 
