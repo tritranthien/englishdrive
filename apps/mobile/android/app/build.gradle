@@ -91,7 +91,9 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 2
-        versionName "1.1"
+        def voiceDiagnostics = providers.gradleProperty("voiceFilterDiagnostics").orElse("false").get().toBoolean()
+        versionName voiceDiagnostics ? "1.1-voice-trial" : "1.1"
+        buildConfigField "boolean", "VOICE_FILTER_DIAGNOSTICS", voiceDiagnostics.toString()
     }
     signingConfigs {
         debug {

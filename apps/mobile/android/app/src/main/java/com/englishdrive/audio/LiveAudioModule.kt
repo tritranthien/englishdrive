@@ -41,6 +41,9 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
   private var voiceActivityDetector: AudioVoiceActivityDetector? = null
   private var targetSpeakerVerifier: TargetSpeakerVerifier? = null
   private var targetSpeakerGate: TargetSpeakerAudioGate? = null
+  private val speakerProfileStore by lazy { SpeakerProfileStore(reactContext) }
+  private var captureProfileKind = SpeakerProfileKind.PHONE
+  private var appliedThresholdRevision = 0L
   @Volatile private var filterBypassed = false
   private var rejectedSpeechChunks = 0
   private val echoGuard = PlaybackEchoGuard()
@@ -69,6 +72,8 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
 
     try {
       val route = SpeakerAudioRouteResolver.current(reactContext)
+      captureProfileKind = route.kind
+      appliedThresholdRevision = speakerProfileStore.thresholdRevision(route.kind)
       protectSpeakerCapture = route.kind == SpeakerProfileKind.PHONE
       voiceActivityDetector?.close()
       voiceActivityDetector = StrictVoiceActivityDetector.createOrFallback(reactContext)
@@ -81,8 +86,10 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
           targetSpeakerVerifier?.let { verifier ->
             TargetSpeakerAudioGate(
               score = verifier::score,
-              threshold = verifier.threshold,
+              threshold = speakerProfileStore.manualThreshold(route.kind) ?: verifier.threshold,
               finishScore = verifier::finishScore,
+              clockMillis = android.os.SystemClock::elapsedRealtime,
+              collectedSpeechBytes = { verifier.collectedSpeechBytes },
             )
           }
       } else {
@@ -128,6 +135,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       echoTailChunks = 0
       voiceActivityDetector?.reset()
       record.startRecording()
+      emitSpeakerMatch(null, if (targetSpeakerGate == null) "off" else "waiting")
       captureThread =
         thread(start = true, name = "englishdrive-live-capture") {
           Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
@@ -270,8 +278,10 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
           // Never train VAD, speaker embeddings or the bypass counter on AI playback.
           if (detector.isSpeaking) emit(EVENT_ACTIVITY, false)
           detector.reset()
-          targetSpeakerGate?.reset()
+          // AI playback is not a speaker change. Discard the turn, retain identity.
+          targetSpeakerGate?.reset(clearIdentity = false)
           targetSpeakerVerifier?.resetTurn()
+          emitSpeakerMatch(null, if (filterBypassed) "bypassed" else if (targetSpeakerGate == null) "off" else "waiting", "echo-suppressed")
           rejectedSpeechChunks = 0
           Log.d(TAG, "Residual playback echo suppressed")
         }
@@ -282,7 +292,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       if (suppressingEcho && echoTailChunks > 0) continue
       suppressingEcho = false
       val activityChange = detector.processPcm16(chunk)
-      if (com.englishdrive.BuildConfig.DEBUG && activityChange != null) {
+      if ((com.englishdrive.BuildConfig.DEBUG || com.englishdrive.BuildConfig.VOICE_FILTER_DIAGNOSTICS) && activityChange != null) {
         Log.d(
           TAG,
             "Local speech activity=$activityChange rms=${detector.lastRms} " +
@@ -290,6 +300,18 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
         )
       }
       val gate = targetSpeakerGate
+      if (activityChange == true && gate != null) {
+        val revision = speakerProfileStore.thresholdRevision(captureProfileKind)
+        if (revision != appliedThresholdRevision) {
+          gate.updateThreshold(speakerProfileStore.manualThreshold(captureProfileKind) ?: targetSpeakerVerifier!!.threshold)
+          appliedThresholdRevision = revision
+          targetSpeakerVerifier?.resetTurn()
+          rejectedSpeechChunks = 0
+          filterBypassed = false
+          emit(EVENT_FILTER_BYPASSED, false)
+        }
+        emitSpeakerMatch(null, if (filterBypassed) "bypassed" else "waiting")
+      }
       if (gate == null || filterBypassed) {
         emitAudioChunk(chunk)
         activityChange?.let { emit(EVENT_ACTIVITY, it) }
@@ -314,13 +336,24 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
                 "profile=${targetSpeakerVerifier?.profileKind?.storageName}",
             )
             emit(EVENT_FILTER_BYPASSED, true)
+            emitSpeakerMatch(null, "bypassed", "sustained-rejections")
           }
         } else if (!detector.isSpeaking) {
           rejectedSpeechChunks = 0
         }
         result.chunks.forEach(::emitAudioChunk)
         if (result.activity == false) emit(EVENT_ACTIVITY, false)
-        if (com.englishdrive.BuildConfig.DEBUG && activityChange == false) {
+        if (!filterBypassed && (result.scoreUpdated || result.started || activityChange == false)) {
+          val decision = when {
+            result.reason == "short-reply-continuity" -> "continuity"
+            result.started || result.reason == "accepted" -> "accepted"
+            activityChange == false && result.latestScore != null -> "rejected"
+            result.latestScore != null -> "matching"
+            else -> "waiting"
+          }
+          emitSpeakerMatch(result.latestScore, decision, result.reason)
+        }
+        if ((com.englishdrive.BuildConfig.DEBUG || com.englishdrive.BuildConfig.VOICE_FILTER_DIAGNOSTICS) && activityChange == false) {
           Log.d(
             TAG,
             "Speaker turn profile=${targetSpeakerVerifier?.profileKind?.storageName} " +
@@ -337,6 +370,17 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       putString("mimeType", "audio/pcm;rate=$INPUT_SAMPLE_RATE")
     }
     emit(EVENT_CHUNK, event)
+  }
+
+  private fun emitSpeakerMatch(score: Float?, decision: String, reason: String? = null) {
+    emit("liveSpeakerMatch", Arguments.createMap().apply {
+      putString("profileKind", captureProfileKind.storageName)
+      if (score == null) putNull("score") else putDouble("score", score.toDouble())
+      val threshold = targetSpeakerGate?.currentThreshold
+      if (threshold == null) putNull("threshold") else putDouble("threshold", threshold.toDouble())
+      putString("decision", decision)
+      putString("reason", reason)
+    })
   }
 
   private fun configureCaptureEffects(record: AudioRecord) {
@@ -412,6 +456,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
     targetSpeakerGate = null
     targetSpeakerVerifier?.close()
     targetSpeakerVerifier = null
+    emitSpeakerMatch(null, "off")
     MicrophoneLease.release(CAPTURE_OWNER)
   }
 

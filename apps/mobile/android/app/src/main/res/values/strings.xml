@@ -1,10 +1,10 @@
 <resources>
     <string name="app_name">EnglishDrive</string>
-    <string name="commute_notification_channel">Active conversation</string>
-    <string name="commute_notification_channel_description">Keeps an EnglishDrive voice conversation active with the screen locked.</string>
-    <string name="commute_notification_title">EnglishDrive conversation active</string>
-    <string name="commute_notification_text">Microphone and audio are active. Tap to return.</string>
-    <string name="commute_notification_stop">End audio</string>
-    <string name="wake_notification_title">EnglishDrive wake phrase armed</string>
-    <string name="wake_notification_text">Listening on-device for “Hey English Drive”.</string>
+    <string name="commute_notification_channel">Hội thoại đang hoạt động</string>
+    <string name="commute_notification_channel_description">Duy trì hội thoại EnglishDrive khi màn hình khóa.</string>
+    <string name="commute_notification_title">EnglishDrive đang trò chuyện</string>
+    <string name="commute_notification_text">Mic và âm thanh đang hoạt động. Nhấn để quay lại.</string>
+    <string name="commute_notification_stop">Kết thúc</string>
+    <string name="wake_notification_title">EnglishDrive đã bật câu gọi</string>
+    <string name="wake_notification_text">Đang chờ câu gọi “Hey English Drive” trên thiết bị.</string>
 </resources>

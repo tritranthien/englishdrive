@@ -132,6 +132,15 @@ it('keeps only finalized turns in the reviewable history', async () => {
     mockTranscript({ role: 'assistant', text: 'half said', final: false });
   });
   expect(hook.history).toHaveLength(0);
+  expect(hook.assistantTranscript).toBe('half said');
+  expect(hook.userTranscript).toBe('');
+
+  await act(async () => {
+    mockTranscript({ role: 'user', text: 'My words sent to Gemini', final: false });
+  });
+  expect(hook.userTranscript).toBe('My words sent to Gemini');
+  expect(hook.assistantTranscript).toBe('half said');
+  expect(hook.history).toHaveLength(0);
 
   await act(async () => {
     mockTranscript({ role: 'assistant', text: 'Get off work.', final: true });
@@ -141,6 +150,8 @@ it('keeps only finalized turns in the reviewable history', async () => {
     'Get off work.',
     'Nghĩa là gì?',
   ]);
+  expect(hook.userTranscript).toBe(hook.history[1].text);
+  expect(hook.assistantTranscript).toBe('Get off work.');
 
   await act(async () => {
     root.unmount();

@@ -16,15 +16,13 @@ internal class TargetSpeakerVerifier private constructor(
   private var bytesSinceScore = 0
 
   val threshold: Float
-    get() =
-      minOf(
-        profile.threshold,
-        if (profile.kind == SpeakerProfileKind.HEADSET) HEADSET_MAX_THRESHOLD
-        else PHONE_MAX_THRESHOLD,
-      )
+    get() = automaticThreshold(profile)
 
   val profileKind: SpeakerProfileKind
     get() = profile.kind
+
+  val collectedSpeechBytes: Int
+    get() = totalSpeechBytes
 
   /** Returns the best similarity across the route-specific enrollment samples. */
   fun score(bytes: ByteArray): Float? {
@@ -39,7 +37,7 @@ internal class TargetSpeakerVerifier private constructor(
     return computeScore()
   }
 
-  /** Evaluates a completed short utterance by tiling it to the model's minimum input. */
+  /** Short turns contain too little identity information; the gate handles continuity. */
   fun finishScore(): Float? {
     if (totalSpeechBytes < MIN_UTTERANCE_BYTES) return null
     return computeScore()
@@ -56,12 +54,11 @@ internal class TargetSpeakerVerifier private constructor(
 
   private fun computeScore(): Float {
     val bytes = speech.toByteArray()
-    val candidateBytes = tileToMinimum(bytes)
-    val candidate = engine.compute(candidateBytes)
+    val candidate = engine.compute(bytes)
     val similarities =
       profile.embeddings.map { SherpaSpeakerEmbeddingEngine.cosineSimilarity(it, candidate) }
     val similarity = similarities.maxOrNull() ?: -1f
-    if (BuildConfig.DEBUG) {
+    if (BuildConfig.DEBUG || BuildConfig.VOICE_FILTER_DIAGNOSTICS) {
       Log.d(
         TAG,
         "Speaker profile=${profile.kind.storageName} similarity=$similarity " +
@@ -100,9 +97,11 @@ internal class TargetSpeakerVerifier private constructor(
   }
 
   companion object {
-    // Score at 800 ms for lower latency. The sample is repeated to the model's one-second minimum.
-    private const val INITIAL_SCORE_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 8 / 10
-    private const val MIN_UTTERANCE_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2 / 10
+    fun automaticThreshold(profile: SpeakerProfile): Float =
+      minOf(profile.threshold, if (profile.kind == SpeakerProfileKind.HEADSET) HEADSET_MAX_THRESHOLD else PHONE_MAX_THRESHOLD)
+    // Require real speech rather than repeating a short sample to satisfy input length.
+    private const val INITIAL_SCORE_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2
+    private const val MIN_UTTERANCE_BYTES = INITIAL_SCORE_BYTES
     private const val MAX_WINDOW_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2
     private const val RESCORE_STEP_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2 / 10
     private const val PHONE_MIN_THRESHOLD = 0.22f
@@ -148,16 +147,5 @@ internal class TargetSpeakerVerifier private constructor(
       return (enrollmentBaseline(embeddings) - CALIBRATION_MARGIN).coerceIn(minimum, maximum)
     }
 
-    private fun tileToMinimum(bytes: ByteArray): ByteArray {
-      if (bytes.size >= SherpaSpeakerEmbeddingEngine.MIN_SAMPLE_BYTES) return bytes
-      val repeated = ByteArray(SherpaSpeakerEmbeddingEngine.MIN_SAMPLE_BYTES)
-      var offset = 0
-      while (offset < repeated.size) {
-        val copyLength = minOf(bytes.size, repeated.size - offset)
-        System.arraycopy(bytes, 0, repeated, offset, copyLength)
-        offset += copyLength
-      }
-      return repeated
-    }
   }
 }

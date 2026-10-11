@@ -127,7 +127,7 @@ async function apiRequest<T>(
       ? payload.message.join(', ')
       : payload?.message;
 
-    throw new Error(message ?? `Request failed with status ${response.status}`);
+    throw new Error(message ?? `Yêu cầu thất bại (mã ${response.status})`);
   }
 
   return (await response.json()) as T;

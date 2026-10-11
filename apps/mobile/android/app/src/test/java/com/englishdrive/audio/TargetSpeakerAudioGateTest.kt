@@ -95,7 +95,7 @@ class TargetSpeakerAudioGateTest {
   }
 
   @Test
-  fun `uses continuity margin for the next nearby turn`() {
+  fun `does not lower the match threshold during continuity`() {
     var now = 1_000L
     var score = 0.5f
     val gate =
@@ -110,11 +110,168 @@ class TargetSpeakerAudioGateTest {
     assertTrue(first.started)
     gate.process(byteArrayOf(3), speaking = false, activityChange = false)
 
-    now += 2_000
+    now += 20_000
+    gate.reset(clearIdentity = false)
     score = 0.37f
-    gate.process(byteArrayOf(4), speaking = true, activityChange = true)
-    val accepted = gate.process(byteArrayOf(5), speaking = true, activityChange = null)
+    // A score below the threshold must not be rescued by continuity.
+    gate.process(ByteArray(6_400), speaking = true, activityChange = true)
+    val rejected = gate.process(byteArrayOf(5), speaking = false, activityChange = false)
+    assertFalse(rejected.started)
+  }
+
+  @Test
+  fun `short replies inherit only a verified unexpired identity and preserve audio`() {
+    var now = 1_000L
+    var value: Float? = 0.8f
+    val gate = TargetSpeakerAudioGate(score = { value }, clockMillis = { now })
+    verify(gate)
+    value = null
+    gate.reset(clearIdentity = false)
+    now += 20_000
+    val speech = ByteArray(6_400) { 3 }
+    gate.process(speech, true, true)
+    speech.fill(7)
+    val accepted = gate.process(byteArrayOf(5), false, false)
     assertTrue(accepted.started)
+    assertEquals(false, accepted.activity)
+    assertEquals("short-reply-continuity", accepted.reason)
+    assertNull(accepted.confidence)
+    assertEquals(2, accepted.chunks.size)
+    assertEquals(3.toByte(), accepted.chunks.first().first())
+
+    // Repeated short replies cannot keep the identity alive indefinitely.
+    now += 10_001
+    gate.process(ByteArray(6_400), true, true)
+    assertTrue(gate.process(byteArrayOf(5), false, false).chunks.isEmpty())
+  }
+
+  @Test
+  fun `does not inherit at startup after reset or for a long unscorable turn`() {
+    var value: Float? = null
+    val gate = TargetSpeakerAudioGate(score = { value })
+    gate.process(ByteArray(6_400), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
+    value = 0.8f
+    verify(gate)
+    value = null
+    gate.process(ByteArray(64_000), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
+    gate.reset()
+    gate.process(ByteArray(6_400), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
+  }
+
+  @Test
+  fun `a mismatching long turn clears identity for following short replies`() {
+    var value: Float? = 0.8f
+    val gate = TargetSpeakerAudioGate(score = { value })
+    verify(gate)
+    value = 0.1f
+    gate.process(ByteArray(64_000), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
+    value = null
+    gate.process(ByteArray(6_400), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
+  }
+
+  @Test
+  fun `a failed final score clears identity and a later match restores it`() {
+    var value: Float? = 0.8f
+    var final: Float? = null
+    val gate = TargetSpeakerAudioGate(score = { value }, finishScore = { final })
+    verify(gate)
+    value = null
+    final = 0.1f
+    gate.process(ByteArray(64_000), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
+    final = null
+    gate.process(ByteArray(6_400), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
+    value = 0.8f
+    verify(gate)
+    value = null
+    gate.process(ByteArray(6_400), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).started)
+  }
+
+  private fun verify(gate: TargetSpeakerAudioGate) {
+    gate.process(byteArrayOf(1), true, true)
+    assertTrue(gate.process(byteArrayOf(2), true, null).started)
+    gate.process(byteArrayOf(3), false, false)
+  }
+
+  @Test
+  fun `manual threshold is used directly including equality and values above old caps`() {
+    var value = 0.69f
+    val gate = TargetSpeakerAudioGate(score = { value }, threshold = 0.70f)
+    gate.process(byteArrayOf(1), true, true)
+    assertFalse(gate.process(byteArrayOf(2), true, null).started)
+    gate.process(byteArrayOf(3), false, false)
+    value = 0.70f
+    verify(gate)
+    gate.updateThreshold(1f)
+    value = 0.99f
+    gate.process(byteArrayOf(1), true, true)
+    assertFalse(gate.process(byteArrayOf(2), true, null).started)
+    gate.updateThreshold(0f)
+    value = 0f
+    verify(gate)
+  }
+
+  @Test
+  fun `latest score is not the best score of a rejected turn`() {
+    val scores = ArrayDeque(listOf(0.8f, 0.2f))
+    val gate = TargetSpeakerAudioGate(score = { if (scores.isEmpty()) null else scores.removeFirst() }, finishScore = { 0.1f })
+    val first = gate.process(byteArrayOf(1), true, true)
+    assertEquals(0.8f, first.latestScore!!, 0.0001f)
+    val next = gate.process(byteArrayOf(2), true, null)
+    assertEquals(0.2f, next.latestScore!!, 0.0001f)
+    val ended = gate.process(byteArrayOf(3), false, false)
+    assertEquals(0.8f, ended.confidence!!, 0.0001f)
+    assertEquals(0.1f, ended.latestScore!!, 0.0001f)
+    assertTrue(ended.scoreUpdated)
+    assertFalse(ended.started)
+  }
+
+  @Test
+  fun `threshold update clears inherited identity and next turn starts without a stale score`() {
+    var value: Float? = 0.8f
+    val gate = TargetSpeakerAudioGate(score = { value })
+    verify(gate)
+    gate.updateThreshold(0.2f)
+    value = null
+    val start = gate.process(ByteArray(6_400), true, true)
+    assertNull(start.latestScore)
+    val ended = gate.process(byteArrayOf(1), false, false)
+    assertFalse(ended.started)
+    assertNull(ended.latestScore)
+    value = 0.3f
+    verify(gate)
+  }
+
+  @Test
+  fun `ignores a very brief sound even with a verified identity`() {
+    var value: Float? = 0.8f
+    val gate = TargetSpeakerAudioGate(score = { value })
+    verify(gate)
+    value = null
+    gate.process(ByteArray(6_398), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
+  }
+
+  @Test
+  fun `VAD silence tail does not make a short reply require a new embedding`() {
+    var value: Float? = 0.8f
+    var speechBytes = 64_000
+    val gate = TargetSpeakerAudioGate(score = { value }, collectedSpeechBytes = { speechBytes })
+    verify(gate)
+    value = null
+    speechBytes = 48_000 // 1.5 seconds of real speech, plus VAD hangover below.
+    gate.process(ByteArray(80_000), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).started)
+    speechBytes = 0
+    gate.process(ByteArray(12_800), true, true)
+    assertTrue(gate.process(byteArrayOf(1), false, false).chunks.isEmpty())
   }
 
   @Test

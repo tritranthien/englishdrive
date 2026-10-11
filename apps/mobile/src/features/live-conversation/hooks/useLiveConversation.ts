@@ -49,7 +49,7 @@ async function requestConversationPermissions(allowPrompts: boolean) {
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
       )) === PermissionsAndroid.RESULTS.GRANTED;
   }
-  if (!microphoneGranted) throw new Error('Microphone permission is required');
+  if (!microphoneGranted) throw new Error('Vui lòng cấp quyền sử dụng mic');
 
   if (allowPrompts && Platform.Version >= 33) {
     await PermissionsAndroid.request(
@@ -66,7 +66,7 @@ async function requestConversationPermissions(allowPrompts: boolean) {
 function messageFor(error: unknown) {
   return error instanceof Error
     ? error.message
-    : 'Unknown live conversation error';
+    : 'Đã xảy ra lỗi hội thoại';
 }
 
 function debugLiveError(stage: string, error: unknown) {
@@ -78,6 +78,7 @@ export function useLiveConversation() {
   const [error, setError] = useState<string>();
   const [latestTranscript, setLatestTranscript] = useState<TranscriptEvent>();
   const [assistantTranscript, setAssistantTranscript] = useState('');
+  const [userTranscript, setUserTranscript] = useState('');
   const [vocabulary, setVocabulary] = useState<VocabularyHighlight>();
   const [history, setHistory] = useState<TranscriptLine[]>([]);
   const [filterBypassed, setFilterBypassed] = useState(false);
@@ -176,6 +177,7 @@ export function useLiveConversation() {
       provider.onTranscript(event => {
         setLatestTranscript(event);
         if (event.role === 'assistant') setAssistantTranscript(event.text);
+        else setUserTranscript(event.text);
         const content = event.text.trim();
         if (event.final && content) {
           transcriptLineRef.current += 1;
@@ -234,8 +236,8 @@ export function useLiveConversation() {
       const token = tokenRef.current;
       const sessionId = sessionIdRef.current;
       if (!token || !sessionId)
-        throw new Error('Logical session is unavailable');
-      if (!networkAvailableRef.current) throw new Error('Network unavailable');
+        throw new Error('Phiên hội thoại không khả dụng');
+      if (!networkAvailableRef.current) throw new Error('Không có kết nối mạng');
       const provider = providerRef.current ?? createProvider();
       const liveToken = await createGeminiLiveToken(
         token,
@@ -321,6 +323,7 @@ export function useLiveConversation() {
       setError(undefined);
       setTutor(undefined);
       setAssistantTranscript('');
+      setUserTranscript('');
       setVocabulary(undefined);
       setHistory([]);
       setFilterBypassed(false);
@@ -443,8 +446,8 @@ export function useLiveConversation() {
       setError(nextError.message);
       updateStatus('error');
     });
-    const filterBypassedEvent = liveAudioService.onFilterBypassed(() => {
-      setFilterBypassed(true);
+    const filterBypassedEvent = liveAudioService.onFilterBypassed(bypassed => {
+      setFilterBypassed(bypassed);
     });
     return () => {
       chunks.remove();
@@ -613,6 +616,7 @@ export function useLiveConversation() {
     error,
     latestTranscript,
     assistantTranscript,
+    userTranscript,
     vocabulary,
     history,
     filterBypassed,

@@ -1,19 +1,40 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import {
   speakerVerificationService,
   type SpeakerProfileKind,
   type SpeakerVerificationStatus,
+  type SpeakerMatchEvent,
 } from './speakerVerification.service';
+import { liveAudioService } from '../live-conversation/services/liveAudio.service';
 
 function messageFor(error: unknown) {
-  return error instanceof Error ? error.message : 'Voice enrollment failed';
+  return error instanceof Error ? error.message : 'Không ghi được mẫu giọng';
 }
 
 export function useSpeakerVerification() {
   const [status, setStatus] = useState<SpeakerVerificationStatus>();
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string>();
+  const [match, setMatch] = useState<SpeakerMatchEvent>();
+  const [savingThreshold, setSavingThreshold] = useState(false);
+  const thresholdRequest = useRef(false);
+
+  const setThreshold = useCallback(async (kind: SpeakerProfileKind, value: number | null) => {
+    if (thresholdRequest.current) return;
+    thresholdRequest.current = true;
+    setSavingThreshold(true);
+    setError(undefined);
+    try {
+      setStatus(await speakerVerificationService.setThreshold(kind, value));
+    } catch (nextError) {
+      setError(messageFor(nextError));
+      throw nextError;
+    } finally {
+      thresholdRequest.current = false;
+      setSavingThreshold(false);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!speakerVerificationService.available) return;
@@ -27,7 +48,7 @@ export function useSpeakerVerification() {
       PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
     );
     if (microphone !== PermissionsAndroid.RESULTS.GRANTED) {
-      setError('Microphone permission is required');
+      setError('Vui lòng cấp quyền sử dụng mic');
       return;
     }
     setProgress(0);
@@ -54,6 +75,12 @@ export function useSpeakerVerification() {
   }, []);
 
   useEffect(() => {
+    if (!liveAudioService.available) return;
+    const subscription = liveAudioService.onSpeakerMatch(setMatch);
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
     refresh().catch(nextError => setError(messageFor(nextError)));
     if (!speakerVerificationService.available) return;
     const subscription = speakerVerificationService.onProgress(setProgress);
@@ -67,5 +94,5 @@ export function useSpeakerVerification() {
     };
   }, [refresh]);
 
-  return { status, progress, error, enroll, cancel, remove, refresh };
+  return { status, progress, error, enroll, cancel, remove, refresh, match, savingThreshold, setThreshold };
 }

@@ -21,8 +21,9 @@ clears the reference. Writes and flushes are serialized, and partial PCM writes
 are handled. The playback buffer target is reduced from one second to 200 ms
 (subject to Android's minimum buffer size).
 
-The existing phone/headset enrollment profiles remain compatible because the
-hardware capture and enrollment processing are unchanged. If the phone profile
+The 1.1 echo change preserved existing profiles. The subsequent voice-continuity
+trial adds high-pass filtering to enrollment, so its older profiles require
+re-enrollment. If the phone profile
 was enrolled through a headset, enroll the **phone** profile with the headset
 disconnected before testing the speakerphone filter.
 

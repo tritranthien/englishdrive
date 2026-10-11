@@ -1,5 +1,6 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import type { PcmAudioChunk } from '../types/liveConversation.types';
+import type { SpeakerMatchEvent } from '../../speaker-verification/speakerVerification.service';
 
 type LiveAudioNativeModule = {
   startCapture(): Promise<void>;
@@ -18,7 +19,7 @@ const nativeModule = NativeModules.LiveAudio as
 
 function requireModule() {
   if (Platform.OS !== 'android' || !nativeModule) {
-    throw new Error('Native live audio is unavailable');
+    throw new Error('Âm thanh trực tiếp không khả dụng trên thiết bị');
   }
   return nativeModule;
 }
@@ -49,12 +50,19 @@ export const liveAudioService = {
     const emitter = new NativeEventEmitter(requireModule());
     return emitter.addListener('liveAudioError', (...args) => {
       handler(
-        new Error(typeof args[0] === 'string' ? args[0] : 'Native audio error'),
+        new Error(typeof args[0] === 'string' ? args[0] : 'Lỗi âm thanh trên thiết bị'),
       );
     });
   },
-  onFilterBypassed(handler: () => void) {
+  onSpeakerMatch(handler: (event: SpeakerMatchEvent) => void) {
     const emitter = new NativeEventEmitter(requireModule());
-    return emitter.addListener('liveAudioFilterBypassed', () => handler());
+    return emitter.addListener('liveSpeakerMatch', (...args) => {
+      const event = args[0] as SpeakerMatchEvent | undefined;
+      if (event) handler(event);
+    });
+  },
+  onFilterBypassed(handler: (bypassed: boolean) => void) {
+    const emitter = new NativeEventEmitter(requireModule());
+    return emitter.addListener('liveAudioFilterBypassed', (...args) => handler(args[0] === true));
   },
 };

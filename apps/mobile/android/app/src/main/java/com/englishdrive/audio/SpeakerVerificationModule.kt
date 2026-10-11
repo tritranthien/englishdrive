@@ -38,6 +38,20 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
   fun getStatus(promise: Promise) = promise.resolve(statusMap())
 
   @ReactMethod
+  fun setThreshold(kindValue: String, value: Double?, promise: Promise) {
+    try {
+      val kind = SpeakerProfileKind.fromValue(kindValue)
+      require(value == null || (value.isFinite() && value in 0.0..1.0)) { "Threshold must be between 0 and 1" }
+      check(!enrollmentRunning) { "Wait for enrollment to finish" }
+      check(profileStore.hasProfile(kind)) { "Enroll this microphone first" }
+      profileStore.setThreshold(kind, value?.toFloat())
+      promise.resolve(statusMap())
+    } catch (error: Exception) {
+      promise.reject("THRESHOLD_UPDATE_FAILED", error)
+    }
+  }
+
+  @ReactMethod
   fun startEnrollment(kindValue: String, promise: Promise) {
     val requestedKind =
       try {
@@ -93,8 +107,12 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
         promise.reject("INVALID_PROFILE_KIND", error)
         return
       }
-    profileStore.clear(kind)
-    promise.resolve(statusMap())
+    try {
+      profileStore.clear(kind)
+      promise.resolve(statusMap())
+    } catch (error: Exception) {
+      promise.reject("PROFILE_DELETE_FAILED", error)
+    }
   }
 
   @ReactMethod
@@ -199,6 +217,7 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       }
 
       val segment = ByteArrayOutputStream(ENROLLMENT_SEGMENT_BYTES)
+      val highPass = Pcm16HighPass()
       val embeddings = mutableListOf<FloatArray>()
       val segmentLevels = mutableListOf<Double>()
       var segmentSquareSum = 0.0
@@ -215,12 +234,13 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       ) {
         val count = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
         if (count <= 0) continue
-        val rms = speechRms(buffer, count) ?: continue
+        val filtered = highPass.process(buffer.copyOf(count))
+        val rms = speechRms(filtered, filtered.size) ?: continue
         segmentSquareSum += rms * rms
         segmentSamples += 1
 
         val remaining = ENROLLMENT_SEGMENT_BYTES - segment.size()
-        segment.write(buffer, 0, minOf(count, remaining))
+        segment.write(filtered, 0, minOf(filtered.size, remaining))
         if (segment.size() >= ENROLLMENT_SEGMENT_BYTES) {
           embeddings += engine.compute(segment.toByteArray())
           segmentLevels +=
@@ -323,6 +343,19 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       putBoolean("enrolling", enrollmentRunning)
       putString("enrollingKind", enrollmentKind?.storageName)
       putString("currentRouteKind", SpeakerAudioRouteResolver.current(reactContext).kind.storageName)
+      putMap("thresholds", Arguments.createMap().apply {
+        SpeakerProfileKind.entries.forEach { kind ->
+          val profile = profileStore.load(kind)
+          val automatic = profile?.let { TargetSpeakerVerifier.automaticThreshold(it) }
+          val manual = profileStore.manualThreshold(kind)
+          putMap(kind.storageName, Arguments.createMap().apply {
+            if (automatic == null) putNull("automatic") else putDouble("automatic", automatic.toDouble())
+            if (manual == null) putNull("manual") else putDouble("manual", manual.toDouble())
+            val effective = if (profile == null) null else manual ?: automatic
+            if (effective == null) putNull("effective") else putDouble("effective", effective.toDouble())
+          })
+        }
+      })
     }
 
   private fun emitProgress(progress: Int) {

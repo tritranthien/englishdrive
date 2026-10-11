@@ -1,6 +1,7 @@
 package com.englishdrive.audio
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
@@ -80,12 +81,37 @@ internal object SpeakerAudioRouteResolver {
     }
 }
 
-internal class SpeakerProfileStore(context: Context) {
-  private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+internal class SpeakerProfileStore(private val preferences: SharedPreferences) {
+  constructor(context: Context) : this(context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE))
+
+  fun manualThreshold(kind: SpeakerProfileKind): Float? =
+    if (preferences.contains("threshold_${kind.storageName}"))
+      preferences.getFloat("threshold_${kind.storageName}", 0f) else null
+
+  fun thresholdRevision(kind: SpeakerProfileKind): Long =
+    preferences.getLong("threshold_revision_${kind.storageName}", 0L)
+
+  fun setThreshold(kind: SpeakerProfileKind, value: Float?) {
+    require(value == null || (value.isFinite() && value in 0f..1f)) { "Threshold must be between 0 and 1" }
+    val previous = manualThreshold(kind)
+    val revision = thresholdRevision(kind)
+    val editor = preferences.edit()
+    if (value == null) editor.remove("threshold_${kind.storageName}")
+    else editor.putFloat("threshold_${kind.storageName}", value)
+    if (!editor.putLong("threshold_revision_${kind.storageName}", revision + 1).commit()) {
+      // Android updates in-memory preferences even when the disk commit fails.
+      val rollback = preferences.edit().putLong("threshold_revision_${kind.storageName}", revision)
+      if (previous == null) rollback.remove("threshold_${kind.storageName}")
+      else rollback.putFloat("threshold_${kind.storageName}", previous)
+      rollback.commit()
+      error("Could not save voice threshold")
+    }
+  }
 
   fun hasProfile(kind: SpeakerProfileKind): Boolean = load(kind) != null
 
   fun hasLegacyProfile(): Boolean =
+    SpeakerProfileKind.entries.any { preferences.contains(keyFor(it)) && load(it) == null } ||
     preferences.contains(LEGACY_V3_PHONE_KEY) ||
       preferences.contains(LEGACY_V3_HEADSET_KEY) ||
       preferences.contains(LEGACY_V2_PROFILE_KEY) ||
@@ -142,7 +168,19 @@ internal class SpeakerProfileStore(context: Context) {
     preferences.edit().putString(keyFor(profile.kind), json.toString()).apply()
   }
 
-  fun clear(kind: SpeakerProfileKind) = preferences.edit().remove(keyFor(kind)).apply()
+  fun clear(kind: SpeakerProfileKind) {
+    val profile = preferences.getString(keyFor(kind), null)
+    val manual = manualThreshold(kind)
+    val revision = thresholdRevision(kind)
+    if (!preferences.edit().remove(keyFor(kind)).remove("threshold_${kind.storageName}")
+      .putLong("threshold_revision_${kind.storageName}", revision + 1).commit()) {
+      val rollback = preferences.edit().putString(keyFor(kind), profile)
+        .putLong("threshold_revision_${kind.storageName}", revision)
+      if (manual != null) rollback.putFloat("threshold_${kind.storageName}", manual)
+      rollback.commit()
+      error("Could not delete voice profile")
+    }
+  }
 
   fun clearLegacy() =
     preferences
@@ -178,8 +216,8 @@ internal class SpeakerProfileStore(context: Context) {
     const val PROFILE_KEY_PREFIX = "target_speaker_profile_v4_"
     const val PROFILE_VERSION = 4
     // Bumped whenever the capture chain changes enough to shift embeddings:
-    // 1 = AEC + noise suppression, 2 = adds AGC and high-passed scoring.
-    const val CAPTURE_PIPELINE = 2
+    // 3 = high-pass filtering in both enrollment and scoring.
+    const val CAPTURE_PIPELINE = 3
     const val TAG = "EnglishDriveAudio"
     const val DEFAULT_THRESHOLD = 0.36f
     const val LEGACY_V2_PROFILE_KEY = "target_speaker_embedding_v2"

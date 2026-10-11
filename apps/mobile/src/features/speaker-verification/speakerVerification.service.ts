@@ -8,12 +8,28 @@ export type SpeakerVerificationStatus = {
   enrolling: boolean;
   enrollingKind?: SpeakerProfileKind;
   currentRouteKind: SpeakerProfileKind;
+  thresholds: Record<SpeakerProfileKind, SpeakerThresholdSettings>;
+};
+
+export type SpeakerThresholdSettings = {
+  automatic: number | null;
+  manual: number | null;
+  effective: number | null;
+};
+
+export type SpeakerMatchEvent = {
+  profileKind: SpeakerProfileKind;
+  score: number | null;
+  threshold: number | null;
+  decision: 'waiting' | 'matching' | 'accepted' | 'rejected' | 'continuity' | 'bypassed' | 'off';
+  reason?: string | null;
 };
 
 export type SpeakerProfileKind = 'phone' | 'headset';
 
 type SpeakerVerificationNativeModule = {
   getStatus(): Promise<SpeakerVerificationStatus>;
+  setThreshold(kind: SpeakerProfileKind, value: number | null): Promise<SpeakerVerificationStatus>;
   startEnrollment(kind: SpeakerProfileKind): Promise<SpeakerVerificationStatus>;
   cancelEnrollment(): Promise<SpeakerVerificationStatus>;
   deleteProfile(kind: SpeakerProfileKind): Promise<SpeakerVerificationStatus>;
@@ -27,7 +43,7 @@ const nativeModule = NativeModules.SpeakerVerification as
 
 function requireModule() {
   if (Platform.OS !== 'android' || !nativeModule) {
-    throw new Error('Native speaker verification is unavailable');
+    throw new Error('Bộ lọc giọng nói không khả dụng trên thiết bị');
   }
   return nativeModule;
 }
@@ -35,6 +51,8 @@ function requireModule() {
 export const speakerVerificationService = {
   available: Platform.OS === 'android' && nativeModule !== undefined,
   getStatus: () => requireModule().getStatus(),
+  setThreshold: (kind: SpeakerProfileKind, value: number | null) =>
+    requireModule().setThreshold(kind, value),
   startEnrollment: (kind: SpeakerProfileKind) =>
     requireModule().startEnrollment(kind),
   cancelEnrollment: () => requireModule().cancelEnrollment(),

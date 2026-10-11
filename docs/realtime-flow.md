@@ -32,11 +32,35 @@ and session-resumption settings.
 
 When an enrolled speaker profile exists, Android applies a target-speaker gate after echo/noise
 processing and local VAD. If no profile exists, Android streams directly to Gemini Live. The
-bundled sherpa-onnx runtime computes a CAM++ speaker embedding from the first 1.0 second (or tiled
-samples for short conversational turns like "yes" or "no") and compares it with the locally enrolled
-profile using cosine similarity (threshold 0.30). The gate holds audio until it matches or re-evaluates
-as more speech arrives, then releases it to the barge-in gate and Gemini. Enrollment embeddings are
-stored in app-private Android storage; raw enrollment audio is not persisted.
+bundled sherpa-onnx runtime computes a CAM++ embedding after at least 2 seconds of real speech,
+then every 200 ms using the most recent 2 seconds. It uses the profile's calibrated cosine threshold
+(phone 0.22–0.30, headset 0.10–0.16). No short audio is repeated to manufacture model input.
+The gate buffers audio until two consecutive scores match, or a completed turn's embedding matches.
+After a verified turn, replies with 200 ms to under 2 seconds of energy-qualified speech may inherit identity at
+the end of the reply for 30 seconds. Inherited replies never extend that deadline. A scored mismatch
+clears identity; restarting capture (including microphone route changes) clears it too. Echo suppression
+discards buffered audio but preserves the original identity deadline through AI playback. The trade-off
+is that another person's short reply can pass during this window; this is a conversation filter.
+Enrollment and verification both high-pass the embedding input. Older capture-pipeline profiles require
+re-enrollment. Embeddings stay in app-private storage; raw enrollment audio is not persisted.
+
+For a standalone trial APK with speaker/VAD diagnostics and bundled JavaScript, build
+`:app:assembleRelease -PvoiceFilterDiagnostics=true`. Its version name is `1.1-voice-trial` and logs tagged
+`EnglishDriveAudio` distinguish `short-reply-continuity`, matches, `no-match`, and filter bypass without
+recording raw speech. Omit the property for normal builds.
+
+The My Voice Filter panel receives `liveSpeakerMatch` events with the profile kind, latest cosine
+score (nullable), applied threshold (nullable), decision and reason. It distinguishes insufficient
+speech, verified matches, rejected turns, inherited short replies, bypass and a disabled filter.
+Inherited/bypassed/off states never display a stale match score. Updates are emitted on score
+computation and turn/state transitions rather than every captured audio frame.
+
+Each mic profile has a persisted optional manual threshold, adjustable from 0.00 to 1.00 in steps
+of 0.01. Manual thresholds bypass the automatic calibration caps. Resetting to automatic removes
+the override; re-enrollment preserves it, while deleting the profile removes it. Changes during
+capture are applied at the next VAD turn start, clearing inherited identity and bypass. The UI
+shows the saved setting separately from the actual threshold until it takes effect. Settings and
+embeddings stay on the device; these events do not transmit audio or voiceprints to the server.
 
 `LiveAudioModule` captures raw, little-endian PCM16 mono at 16 kHz in 40 ms chunks. It emits base64
 chunks to React Native because Gemini's raw WebSocket protocol carries audio inside JSON. Model
