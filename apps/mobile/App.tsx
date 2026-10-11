@@ -24,6 +24,7 @@ import { useLiveConversation } from './src/features/live-conversation/hooks/useL
 import { useSpeakerVerification } from './src/features/speaker-verification/useSpeakerVerification';
 import { SpeakerMatchSettings } from './src/features/speaker-verification/SpeakerMatchSettings';
 import { commuteAudio, type AssistantStatus } from './src/native/commute-audio';
+import { authSession } from './src/native/auth-session';
 
 const microphoneLabels = { phone: 'điện thoại', headset: 'tai nghe' } as const;
 
@@ -142,6 +143,7 @@ function SessionReport({ report }: { report: SessionAnalysisReport }) {
 
 function AppContent() {
   const [auth, setAuth] = useState<AuthResult>();
+  const [authRestoring, setAuthRestoring] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -170,6 +172,25 @@ function AppContent() {
   const [assistantError, setAssistantError] = useState<string>();
   const realtimeStart = realtime.start;
   const realtimeIsActive = realtime.isActive;
+
+  useEffect(() => {
+    let mounted = true;
+    authSession
+      .restore()
+      .then(session => {
+        if (mounted) setAuth(session);
+      })
+      .catch(() => {
+        if (mounted)
+          setAuthError('Không khôi phục được phiên. Vui lòng đăng nhập lại.');
+      })
+      .finally(() => {
+        if (mounted) setAuthRestoring(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const refreshAssistantStatus = useCallback(async () => {
     if (!commuteAudio.available) return;
@@ -276,6 +297,8 @@ function AppContent() {
         authMode === 'register'
           ? await register({ email, password, name })
           : await login({ email, password });
+      await authSession.save(result);
+      setPassword('');
       setAuth(result);
     } catch (error) {
       setAuthError(
@@ -284,6 +307,32 @@ function AppContent() {
     } finally {
       setAuthLoading(false);
     }
+  }
+
+  async function signOut() {
+    setAuthLoading(true);
+    setAssistantError(undefined);
+    try {
+      await authSession.clear();
+      setAuth(undefined);
+      setPassword('');
+      setAuthMode('login');
+    } catch {
+      setAssistantError('Không đăng xuất được. Vui lòng thử lại.');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  if (authRestoring) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.authContainer}>
+          <ActivityIndicator color="#53d9b1" />
+          <Text style={styles.subtitle}>Đang khôi phục phiên đăng nhập…</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   if (!auth) {
@@ -825,8 +874,8 @@ function AppContent() {
               thông báo khi mic đang hoạt động.
             </Text>
             <Pressable
-              disabled={isActive || assistantStatus?.wakeArmed}
-              onPress={() => setAuth(undefined)}
+              disabled={authLoading || isActive || assistantStatus?.wakeArmed}
+              onPress={signOut}
             >
               <Text
                 style={[
