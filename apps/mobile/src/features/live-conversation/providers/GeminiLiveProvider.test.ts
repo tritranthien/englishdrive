@@ -53,6 +53,135 @@ describe('GeminiLiveProvider', () => {
     globalThis.WebSocket = OriginalWebSocket;
   });
 
+  it('waits for persistence before acknowledging a spoken save request', async () => {
+    const provider = new GeminiLiveProvider();
+    let confirm!: () => void;
+    const save = jest.fn(
+      () =>
+        new Promise<void>(resolve => {
+          confirm = resolve;
+        }),
+    );
+    provider.onSaveVocabulary(save);
+    const connected = provider.connect({
+      token: 'token',
+      model: 'model',
+      systemInstruction: 'Tutor',
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.message({ setupComplete: {} });
+    await connected;
+    const sent = socket.sent.length;
+    socket.message({
+      toolCall: {
+        functionCalls: [
+          {
+            id: 'save-1',
+            name: 'save_vocabulary',
+            args: {
+              term: 'commute',
+              meaningVi: 'đi làm',
+              example: 'I commute by bus.',
+            },
+          },
+        ],
+      },
+    });
+    expect(save).toHaveBeenCalledWith({
+      term: 'commute',
+      meaningVi: 'đi làm',
+      example: 'I commute by bus.',
+    });
+    expect(socket.sent).toHaveLength(sent);
+    confirm();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(JSON.parse(socket.sent[socket.sent.length - 1])).toMatchObject({
+      toolResponse: {
+        functionResponses: [
+          {
+            id: 'save-1',
+            name: 'save_vocabulary',
+            response: { saved: true, term: 'commute' },
+          },
+        ],
+      },
+    });
+  });
+
+  it('reports an unconfirmed save instead of success if backend persistence fails', async () => {
+    const provider = new GeminiLiveProvider();
+    provider.onSaveVocabulary(
+      jest.fn(async () => {
+        throw new Error('Offline');
+      }),
+    );
+    const connected = provider.connect({
+      token: 'token',
+      model: 'model',
+      systemInstruction: 'Tutor',
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.message({ setupComplete: {} });
+    await connected;
+    socket.message({
+      toolCall: {
+        functionCalls: [
+          {
+            id: 'save-2',
+            name: 'save_vocabulary',
+            args: { term: 'deadline', meaningVi: 'hạn chót' },
+          },
+        ],
+      },
+    });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(JSON.parse(socket.sent[socket.sent.length - 1])).toMatchObject({
+      toolResponse: {
+        functionResponses: [
+          { id: 'save-2', response: { result: 'error', saved: false } },
+        ],
+      },
+    });
+  });
+
+  it('does not send a late save acknowledgement for a cancelled tool call', async () => {
+    const provider = new GeminiLiveProvider();
+    let confirm!: () => void;
+    provider.onSaveVocabulary(
+      () =>
+        new Promise<void>(resolve => {
+          confirm = resolve;
+        }),
+    );
+    const connected = provider.connect({
+      token: 'token',
+      model: 'model',
+      systemInstruction: 'Tutor',
+    });
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.message({ setupComplete: {} });
+    await connected;
+    const sent = socket.sent.length;
+    socket.message({
+      toolCall: {
+        functionCalls: [
+          {
+            id: 'save-cancel',
+            name: 'save_vocabulary',
+            args: { term: 'hello', meaningVi: 'xin chào' },
+          },
+        ],
+      },
+    });
+    socket.message({ toolCallCancellation: { ids: ['save-cancel'] } });
+    confirm();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(socket.sent).toHaveLength(sent);
+  });
+
   it('allows slow mobile networks time to establish the socket', async () => {
     jest.useFakeTimers();
     const provider = new GeminiLiveProvider();
@@ -85,7 +214,9 @@ describe('GeminiLiveProvider', () => {
     await provider.disconnect();
     socket.open();
     socket.message({ setupComplete: {} });
-    expect(await rejected).toEqual(new Error('Gemini Live connection cancelled'));
+    expect(await rejected).toEqual(
+      new Error('Gemini Live connection cancelled'),
+    );
     expect(socket.sent).toHaveLength(0);
     expect(states).not.toHaveBeenCalledWith('listening');
   });

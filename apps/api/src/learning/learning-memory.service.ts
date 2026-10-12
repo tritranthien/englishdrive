@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { SessionAnalysisOutput } from '../analysis/session-analysis.schemas.js';
 
-function memoryKey(value: string) {
+export function memoryKey(value: string) {
   return value
     .normalize('NFKC')
     .trim()
@@ -158,7 +158,13 @@ export class LearningMemoryService {
         where: { vocabularyItemId: id },
       });
       if (occurrenceCount === 0) {
-        await transaction.vocabularyItem.delete({ where: { id } });
+        await transaction.vocabularyItem.deleteMany({
+          where: { id, pinned: false },
+        });
+        await transaction.vocabularyItem.updateMany({
+          where: { id, pinned: true },
+          data: { occurrenceCount: 0 },
+        });
       } else {
         await transaction.vocabularyItem.update({
           where: { id },

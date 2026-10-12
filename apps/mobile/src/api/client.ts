@@ -100,24 +100,39 @@ export type SessionAnalysisReport = {
 };
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'PATCH';
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   token?: string;
   body?: unknown;
+  timeoutMs?: number;
 };
 
 async function apiRequest<T>(
   path: string,
-  { method = 'GET', token, body }: RequestOptions = {},
+  { method = 'GET', token, body, timeoutMs }: RequestOptions = {},
 ): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers: {
-      Accept: 'application/json',
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+  const controller = timeoutMs ? new AbortController() : undefined;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : undefined;
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      ...(controller ? { signal: controller.signal } : {}),
+      headers: {
+        Accept: 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch (error) {
+    if (controller?.signal.aborted)
+      throw new Error('Kết nối quá chậm. Từ chưa gửi được sẽ chờ đồng bộ lại.');
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as {
@@ -217,4 +232,48 @@ export function createGeminiLiveToken(
     token,
     body: { sessionId, conversationMode },
   });
+}
+
+export type AccountVocabulary = {
+  id: string;
+  key: string;
+  term: string;
+  meaningVi: string;
+  example?: string;
+  savedAt: number;
+  updatedAt: number;
+};
+export function listAccountVocabulary(token: string, cursor?: string) {
+  return apiRequest<{ items: AccountVocabulary[]; nextCursor: string | null }>(
+    `/vocabulary${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+    { token, timeoutMs: 30_000 },
+  );
+}
+export function saveAccountVocabulary(
+  token: string,
+  word: { term: string; meaningVi: string; example?: string },
+) {
+  return apiRequest<AccountVocabulary>('/vocabulary', {
+    method: 'POST',
+    token,
+    body: word,
+    timeoutMs: 30_000,
+  });
+}
+export function importAccountVocabulary(
+  token: string,
+  words: Array<{ term: string; meaningVi: string; example?: string }>,
+) {
+  return apiRequest<{ imported: number }>('/vocabulary/import', {
+    method: 'POST',
+    token,
+    body: { words },
+    timeoutMs: 30_000,
+  });
+}
+export function deleteAccountVocabulary(token: string, id: string) {
+  return apiRequest<{ deleted: boolean }>(
+    `/vocabulary/${encodeURIComponent(id)}`,
+    { method: 'DELETE', token, timeoutMs: 30_000 },
+  );
 }

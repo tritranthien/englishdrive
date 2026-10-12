@@ -18,6 +18,7 @@ export type SpeakerThresholdSettings = {
 };
 
 export type SpeakerMatchEvent = {
+  sampleSpeechMs?: number | null;
   profileKind: SpeakerProfileKind;
   score: number | null;
   threshold: number | null;

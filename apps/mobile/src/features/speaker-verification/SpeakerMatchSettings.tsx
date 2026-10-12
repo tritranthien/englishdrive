@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { SpeakerMatchEvent, SpeakerThresholdSettings } from './speakerVerification.service';
+import { VoiceTestSamples } from './VoiceTestSamples';
 
 const labels: Record<SpeakerMatchEvent['decision'], string> = {
   waiting: 'Chưa đủ âm thanh để tính điểm',
@@ -61,6 +62,8 @@ export function SpeakerMatchSettings({ settings, match, active, enabled, saving,
   const score = current?.decision === 'continuity' || current?.decision === 'bypassed' || current?.decision === 'off'
     ? null : current?.score;
   const applied = current?.threshold;
+  const sampleSpeechMs = current?.sampleSpeechMs;
+  const shortSample = score != null && sampleSpeechMs != null && sampleSpeechMs < 2000;
   const pending = active && enabled && applied != null && Math.abs(applied - value) > 0.00001;
   return (
     <View style={styles.panel}>
@@ -68,7 +71,13 @@ export function SpeakerMatchSettings({ settings, match, active, enabled, saving,
       <Text style={styles.score}>
         Điểm: {score == null ? '—' : score.toFixed(2)} · Ngưỡng đang dùng: {applied == null ? '—' : applied.toFixed(2)}
       </Text>
-      <Text style={styles.hint}>{!active ? 'Chưa mở hội thoại' : current ? labels[current.decision] : 'Đang chờ giọng nói'}</Text>
+      {score != null && sampleSpeechMs != null ? (
+        <Text style={styles.hint}>
+          Mẫu giọng: {(sampleSpeechMs / 1000).toFixed(2)} giây.
+          {shortSample ? ' Điểm tham khảo: câu ngắn chưa đủ tin cậy để xác nhận giọng. Nói câu đầu khoảng 3 giây với giọng tự nhiên.' : ' Đủ độ dài để so khớp giọng.'}
+        </Text>
+      ) : null}
+      <Text style={styles.hint}>{!active ? 'Chưa mở hội thoại' : current?.reason === 'speaker-playback' ? 'Mic tạm ngừng khi trợ lý đang phát loa; đợi nói xong rồi trả lời.' : shortSample ? 'Đang chờ mẫu giọng đủ dài để xác nhận.' : current ? labels[current.decision] : 'Đang chờ giọng nói'}</Text>
       <Text style={styles.label}>
         Ngưỡng {settings.manual == null ? 'tự động' : 'thủ công'}: {draft.toFixed(2)}
       </Text>
@@ -94,7 +103,7 @@ export function SpeakerMatchSettings({ settings, match, active, enabled, saving,
           <Text style={styles.buttonText}>+</Text>
         </Pressable>
       </View>
-      <Text style={styles.hint}>0,00: dễ chấp nhận ← → 1,00: chặt hơn. Điểm cosine không phải xác suất.</Text>
+      <Text style={styles.hint}>0,00: tắt xác minh danh tính giọng nói; vẫn phát hiện câu nói và chống vọng âm. Ngưỡng càng cao càng chặt. Điểm cosine không phải xác suất.</Text>
       <Text style={styles.hint}>
         {saving ? 'Đang lưu…' : pending ? 'Đã lưu. Áp dụng từ câu tiếp theo.' : 'Lưu riêng cho mic này. Thay đổi trong hội thoại áp dụng từ câu tiếp theo.'}
       </Text>
@@ -103,6 +112,7 @@ export function SpeakerMatchSettings({ settings, match, active, enabled, saving,
           Về ngưỡng tự động{settings.automatic == null ? '' : ` (${settings.automatic.toFixed(2)})`}
         </Text>
       </Pressable>
+      <VoiceTestSamples active={active} />
     </View>
   );
 }

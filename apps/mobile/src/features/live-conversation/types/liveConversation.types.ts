@@ -53,6 +53,9 @@ export interface LiveConversationProvider {
   onAudio(handler: (chunk: PcmAudioChunk) => void): () => void;
   onTranscript(handler: (event: TranscriptEvent) => void): () => void;
   onVocabulary(handler: (highlight: VocabularyHighlight) => void): () => void;
+  onSaveVocabulary(
+    handler: (highlight: VocabularyHighlight) => Promise<void>,
+  ): () => void;
   onInterruption(handler: () => void): () => void;
   onStateChange(handler: (state: LiveConversationState) => void): () => void;
   onError(handler: (error: Error) => void): () => void;

@@ -12,6 +12,7 @@ class CommuteAudioPackage : ReactPackage {
       LiveAudioModule(reactContext),
       SpeakerVerificationModule(reactContext),
       AuthSessionModule(reactContext),
+      VocabularyStorageModule(reactContext),
     )
 
   override fun createViewManagers(

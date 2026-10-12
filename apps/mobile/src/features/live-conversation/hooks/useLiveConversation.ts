@@ -64,16 +64,22 @@ async function requestConversationPermissions(allowPrompts: boolean) {
 }
 
 function messageFor(error: unknown) {
-  return error instanceof Error
-    ? error.message
-    : 'Đã xảy ra lỗi hội thoại';
+  return error instanceof Error ? error.message : 'Đã xảy ra lỗi hội thoại';
 }
 
 function debugLiveError(stage: string, error: unknown) {
   if (__DEV__) console.info(`[LiveConversation] ${stage}`, messageFor(error));
 }
 
-export function useLiveConversation() {
+export function useLiveConversation(
+  onVocabulary?: (word: VocabularyHighlight) => void,
+  onSaveVocabulary?: (word: VocabularyHighlight) => Promise<void>,
+) {
+  const vocabularyHandlerRef = useRef(onVocabulary);
+  vocabularyHandlerRef.current = onVocabulary;
+  const saveVocabularyHandlerRef = useRef(onSaveVocabulary);
+  saveVocabularyHandlerRef.current = onSaveVocabulary;
+  const [pendingVocabularySaves, setPendingVocabularySaves] = useState(0);
   const [status, setStatus] = useState<LiveConversationState>('idle');
   const [error, setError] = useState<string>();
   const [latestTranscript, setLatestTranscript] = useState<TranscriptEvent>();
@@ -195,7 +201,7 @@ export function useLiveConversation() {
         transcriptSequenceRef.current += 1;
         const occurredAt =
           event.role === 'user'
-            ? (userTurnStartedAtRef.current ?? new Date().toISOString())
+            ? userTurnStartedAtRef.current ?? new Date().toISOString()
             : new Date().toISOString();
         transcriptPendingRef.current.push({
           clientMessageId: `${Date.now()}-${transcriptSequenceRef.current}`,
@@ -206,7 +212,21 @@ export function useLiveConversation() {
         if (event.role === 'user') userTurnStartedAtRef.current = undefined;
         flushTranscript().catch(() => {});
       }),
-      provider.onVocabulary(highlight => setVocabulary(highlight)),
+      provider.onVocabulary(highlight => {
+        setVocabulary(highlight);
+        vocabularyHandlerRef.current?.(highlight);
+      }),
+      provider.onSaveVocabulary(async highlight => {
+        setVocabulary(highlight);
+        const save = saveVocabularyHandlerRef.current;
+        if (!save) throw new Error('Không mở được sổ từ vựng');
+        setPendingVocabularySaves(count => count + 1);
+        try {
+          await save(highlight);
+        } finally {
+          setPendingVocabularySaves(count => Math.max(0, count - 1));
+        }
+      }),
       provider.onInterruption(() => {
         liveAudioService.clearPlayback();
         bargeInGateRef.current.setAiSpeaking(false);
@@ -237,7 +257,8 @@ export function useLiveConversation() {
       const sessionId = sessionIdRef.current;
       if (!token || !sessionId)
         throw new Error('Phiên hội thoại không khả dụng');
-      if (!networkAvailableRef.current) throw new Error('Không có kết nối mạng');
+      if (!networkAvailableRef.current)
+        throw new Error('Không có kết nối mạng');
       const provider = providerRef.current ?? createProvider();
       const liveToken = await createGeminiLiveToken(
         token,
@@ -458,7 +479,7 @@ export function useLiveConversation() {
   }, [updateStatus]);
 
   useEffect(() => {
-    if (status !== 'thinking') return;
+    if (status !== 'thinking' || pendingVocabularySaves > 0) return;
     const timeout = setTimeout(() => {
       if (!activeRef.current || statusRef.current !== 'thinking') return;
       debugLiveError(
@@ -470,7 +491,7 @@ export function useLiveConversation() {
       providerRef.current?.recoverFromStalledTurn();
     }, THINKING_TIMEOUT_MS);
     return () => clearTimeout(timeout);
-  }, [status]);
+  }, [status, pendingVocabularySaves]);
 
   useEffect(() => {
     if (!commuteAudio.available) return;

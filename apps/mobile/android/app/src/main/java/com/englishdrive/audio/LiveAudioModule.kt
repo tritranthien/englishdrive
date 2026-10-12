@@ -47,6 +47,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
   @Volatile private var filterBypassed = false
   private var rejectedSpeechChunks = 0
   private val echoGuard = PlaybackEchoGuard()
+  private val speakerPlaybackGuard = SpeakerPlaybackGuard(android.os.SystemClock::elapsedRealtime)
   private var protectSpeakerCapture = false
   private var suppressingEcho = false
   private var echoTailChunks = 0
@@ -90,6 +91,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
               finishScore = verifier::finishScore,
               clockMillis = android.os.SystemClock::elapsedRealtime,
               collectedSpeechBytes = { verifier.collectedSpeechBytes },
+              primeScore = verifier::prime,
             )
           }
       } else {
@@ -193,6 +195,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
         }
         audioTrack = track
         echoGuard.reset()
+        speakerPlaybackGuard.reset()
         track.play()
         promise.resolve(null)
       } catch (error: Exception) {
@@ -211,7 +214,9 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
         emit(EVENT_ERROR, "Gemini returned invalid base64 audio")
         return
       }
+    speakerPlaybackGuard.queued()
     playbackHandler.post {
+      try {
       if (generation != playbackGeneration) return@post
       val track = audioTrack ?: return@post
       if (generation == playbackGeneration) {
@@ -221,7 +226,10 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
             val written = synchronized(playbackLock) {
               if (generation != playbackGeneration) return@post
               val count = track.write(bytes, offset, bytes.size - offset, AudioTrack.WRITE_BLOCKING)
-              if (count > 0) echoGuard.append(bytes, offset, count)
+              if (count > 0) {
+                echoGuard.append(bytes, offset, count)
+                speakerPlaybackGuard.written(count)
+              }
               count
             }
             if (written <= 0) break
@@ -229,6 +237,9 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
           }
         } catch (_: IllegalStateException) {
         }
+      }
+      } finally {
+        if (generation == playbackGeneration) speakerPlaybackGuard.completed()
       }
     }
   }
@@ -243,6 +254,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
         track.pause()
         track.flush()
         echoGuard.reset()
+        speakerPlaybackGuard.reset()
         track.play()
       } catch (_: IllegalStateException) {
       }
@@ -263,6 +275,9 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
 
   private fun captureLoop(record: AudioRecord) {
     val buffer = ByteArray(INPUT_CHUNK_BYTES)
+    var diagnosticFrames = 0
+    var diagnosticForwarded = 0
+    var diagnosticEcho = 0
     while (captureRunning) {
       val count = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
       if (count <= 0 || !captureRunning) continue
@@ -271,7 +286,23 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       val rendered = try {
         audioTrack?.playbackHeadPosition?.toLong()?.and(0xffffffffL) ?: 0L
       } catch (_: IllegalStateException) { 0L }
-      val echo = protectSpeakerCapture && echoGuard.isEcho(chunk, rendered)
+      // Android AEC and correlation can miss processed/reverberant speech.
+      // Phone capture must not turn the assistant's loudspeaker output into a user turn.
+      val playbackBlocked = protectSpeakerCapture && speakerPlaybackGuard.suppressCapture(rendered)
+      val echo = playbackBlocked || (protectSpeakerCapture && echoGuard.isEcho(chunk, rendered))
+      if (com.englishdrive.BuildConfig.DEBUG || com.englishdrive.BuildConfig.VOICE_FILTER_DIAGNOSTICS) {
+        diagnosticFrames += 1
+        if (echo) diagnosticEcho += 1
+        if (diagnosticFrames >= 75) {
+          Log.d(TAG, "Capture health rms=${detector.lastRms} vadThreshold=${detector.currentThreshold} " +
+            "speaking=${detector.isSpeaking} matchThreshold=${targetSpeakerGate?.currentThreshold} " +
+            "speechBytes=${targetSpeakerVerifier?.collectedSpeechBytes} forwarded=$diagnosticForwarded " +
+            "echoFrames=$diagnosticEcho bypassed=$filterBypassed")
+          diagnosticFrames = 0
+          diagnosticForwarded = 0
+          diagnosticEcho = 0
+        }
+      }
       if (echo) echoTailChunks = 2 else echoTailChunks = (echoTailChunks - 1).coerceAtLeast(0)
       if (echo) {
         if (!suppressingEcho) {
@@ -281,9 +312,9 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
           // AI playback is not a speaker change. Discard the turn, retain identity.
           targetSpeakerGate?.reset(clearIdentity = false)
           targetSpeakerVerifier?.resetTurn()
-          emitSpeakerMatch(null, if (filterBypassed) "bypassed" else if (targetSpeakerGate == null) "off" else "waiting", "echo-suppressed")
+          emitSpeakerMatch(null, if (filterBypassed) "bypassed" else if (targetSpeakerGate == null) "off" else "waiting", if (playbackBlocked) "speaker-playback" else "echo-suppressed")
           rejectedSpeechChunks = 0
-          Log.d(TAG, "Residual playback echo suppressed")
+          Log.d(TAG, if (playbackBlocked) "Phone microphone paused during speaker playback" else "Residual playback echo suppressed")
         }
         suppressingEcho = true
         continue
@@ -314,6 +345,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       }
       if (gate == null || filterBypassed) {
         emitAudioChunk(chunk)
+        diagnosticForwarded += 1
         activityChange?.let { emit(EVENT_ACTIVITY, it) }
       } else {
         if (activityChange == true) targetSpeakerVerifier?.resetTurn()
@@ -342,6 +374,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
           rejectedSpeechChunks = 0
         }
         result.chunks.forEach(::emitAudioChunk)
+        diagnosticForwarded += result.chunks.size
         if (result.activity == false) emit(EVENT_ACTIVITY, false)
         if (!filterBypassed && (result.scoreUpdated || result.started || activityChange == false)) {
           val decision = when {
@@ -373,13 +406,16 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
   }
 
   private fun emitSpeakerMatch(score: Float?, decision: String, reason: String? = null) {
+    val identityDisabled = targetSpeakerGate?.currentThreshold == 0f && !filterBypassed
     emit("liveSpeakerMatch", Arguments.createMap().apply {
       putString("profileKind", captureProfileKind.storageName)
-      if (score == null) putNull("score") else putDouble("score", score.toDouble())
+      if (score == null || identityDisabled) putNull("score") else putDouble("score", score.toDouble())
+      val scoreSpeechMs = if (score == null || identityDisabled) null else targetSpeakerVerifier?.lastScoreSpeechMs
+      if (scoreSpeechMs == null) putNull("sampleSpeechMs") else putInt("sampleSpeechMs", scoreSpeechMs)
       val threshold = targetSpeakerGate?.currentThreshold
       if (threshold == null) putNull("threshold") else putDouble("threshold", threshold.toDouble())
-      putString("decision", decision)
-      putString("reason", reason)
+      putString("decision", if (identityDisabled) "off" else decision)
+      putString("reason", if (identityDisabled && reason != "speaker-playback") "threshold-disabled" else reason)
     })
   }
 
@@ -473,6 +509,7 @@ class LiveAudioModule(private val reactContext: ReactApplicationContext) :
       audioTrack?.release()
       audioTrack = null
       echoGuard.reset()
+      speakerPlaybackGuard.reset()
     }
   }
 

@@ -9,6 +9,18 @@ const match: SpeakerMatchEvent = { profileKind: 'phone', score: 0.27, threshold:
 const content = (root: Renderer.ReactTestRenderer) => root.root.findAllByType(Text)
   .map(node => React.Children.toArray(node.props.children).join('')).join('\n');
 
+it('marks short-sample scores as diagnostic and shows actual speech duration', async () => {
+  let root!: Renderer.ReactTestRenderer;
+  await act(async () => { root = Renderer.create(<SpeakerMatchSettings settings={settings} match={{ ...match, score: 0.03, sampleSpeechMs: 680 }} active enabled saving={false} onSave={jest.fn()} />); });
+  expect(content(root)).toContain('Mẫu giọng: 0.68 giây');
+  expect(content(root)).toContain('Điểm tham khảo');
+  expect(content(root)).toContain('Đang chờ mẫu giọng đủ dài');
+  await act(async () => root.update(<SpeakerMatchSettings settings={settings} match={{ ...match, score: 0.67, sampleSpeechMs: 2000 }} active enabled saving={false} onSave={jest.fn()} />));
+  expect(content(root)).toContain('Đủ độ dài để so khớp giọng');
+  expect(content(root)).not.toContain('Điểm tham khảo');
+  await act(async () => root.unmount());
+});
+
 it('shows actual score and applied threshold separately from the saved pending threshold', async () => {
   let root!: Renderer.ReactTestRenderer;
   await act(async () => { root = Renderer.create(<SpeakerMatchSettings settings={settings} match={match} active enabled saving={false} onSave={jest.fn()} />); });

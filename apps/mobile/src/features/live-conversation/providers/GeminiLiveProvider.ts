@@ -23,6 +23,12 @@ type GeminiFunctionCall = {
   args?: Record<string, unknown>;
 };
 
+type GeminiFunctionResponse = {
+  id?: string;
+  name?: string;
+  response: Record<string, unknown>;
+};
+
 type GeminiServerMessage = {
   setupComplete?: object;
   serverContent?: {
@@ -37,6 +43,7 @@ type GeminiServerMessage = {
   toolCall?: {
     functionCalls?: GeminiFunctionCall[];
   };
+  toolCallCancellation?: { ids?: string[] };
   sessionResumptionUpdate?: {
     resumable?: boolean;
     newHandle?: string;
@@ -127,6 +134,10 @@ export class GeminiLiveProvider implements LiveConversationProvider {
   private readonly vocabularyHandlers = new Set<
     (highlight: VocabularyHighlight) => void
   >();
+  private readonly saveVocabularyHandlers = new Set<
+    (highlight: VocabularyHighlight) => Promise<void>
+  >();
+  private readonly cancelledToolCalls = new Set<string>();
   private readonly interruptionHandlers = new Set<() => void>();
   private readonly stateHandlers = new Set<
     (state: LiveConversationState) => void
@@ -148,8 +159,11 @@ export class GeminiLiveProvider implements LiveConversationProvider {
     this.resetAudioActivity();
     this.outputTranscript = '';
     this.messageQueue = Promise.resolve();
+    this.cancelledToolCalls.clear();
     this.emitState('connecting');
-    const url = `${GEMINI_LIVE_ENDPOINT}?access_token=${encodeURIComponent(config.token)}`;
+    const url = `${GEMINI_LIVE_ENDPOINT}?access_token=${encodeURIComponent(
+      config.token,
+    )}`;
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -333,9 +347,7 @@ export class GeminiLiveProvider implements LiveConversationProvider {
       return;
     this.inputActivityOpen = true;
     debugEvent('activity start');
-    this.socket.send(
-      JSON.stringify({ realtimeInput: { activityStart: {} } }),
-    );
+    this.socket.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
   }
 
   endAudioActivity() {
@@ -414,6 +426,11 @@ export class GeminiLiveProvider implements LiveConversationProvider {
     return () => this.vocabularyHandlers.delete(handler);
   }
 
+  onSaveVocabulary(handler: (highlight: VocabularyHighlight) => Promise<void>) {
+    this.saveVocabularyHandlers.add(handler);
+    return () => this.saveVocabularyHandlers.delete(handler);
+  }
+
   onInterruption(handler: () => void) {
     this.interruptionHandlers.add(handler);
     return () => this.interruptionHandlers.delete(handler);
@@ -430,6 +447,9 @@ export class GeminiLiveProvider implements LiveConversationProvider {
   }
 
   private handleMessage(message: GeminiServerMessage) {
+    message.toolCallCancellation?.ids?.forEach(id =>
+      this.cancelledToolCalls.add(id),
+    );
     const resumption = message.sessionResumptionUpdate;
     if (resumption?.resumable && resumption.newHandle) {
       this.resumeHandle = resumption.newHandle;
@@ -504,35 +524,83 @@ export class GeminiLiveProvider implements LiveConversationProvider {
     toolCall: NonNullable<GeminiServerMessage['toolCall']>,
   ) {
     const calls = toolCall.functionCalls ?? [];
-    calls.forEach(call => {
-      if (call.name !== 'show_vocabulary') return;
-      const args = call.args ?? {};
-      const term = typeof args.term === 'string' ? args.term.trim() : '';
-      const meaningVi =
-        typeof args.meaningVi === 'string' ? args.meaningVi.trim() : '';
-      if (!term || !meaningVi) return;
-      debugEvent('vocabulary highlight', term);
-      const highlight: VocabularyHighlight = { term, meaningVi };
-      const example =
-        typeof args.example === 'string' ? args.example.trim() : '';
-      if (example) highlight.example = example;
-      this.vocabularyHandlers.forEach(handler => handler(highlight));
-    });
+    const socket = this.socket;
+    const responses = calls.map(
+      (call): GeminiFunctionResponse | Promise<GeminiFunctionResponse> => {
+        const ok = { id: call.id, name: call.name, response: { result: 'ok' } };
+        if (call.name !== 'show_vocabulary' && call.name !== 'save_vocabulary')
+          return ok;
+        const args = call.args ?? {};
+        const term = typeof args.term === 'string' ? args.term.trim() : '';
+        const meaningVi =
+          typeof args.meaningVi === 'string' ? args.meaningVi.trim() : '';
+        if (!term || !meaningVi)
+          return call.name === 'save_vocabulary'
+            ? {
+                ...ok,
+                response: {
+                  result: 'error',
+                  saved: false,
+                  error: 'Thiếu từ hoặc nghĩa để lưu.',
+                },
+              }
+            : ok;
+        debugEvent('vocabulary highlight', term);
+        const highlight: VocabularyHighlight = { term, meaningVi };
+        const example =
+          typeof args.example === 'string' ? args.example.trim() : '';
+        if (example) highlight.example = example;
+        if (call.name === 'save_vocabulary')
+          return this.saveVocabularyTool(call, highlight);
+        this.vocabularyHandlers.forEach(handler => handler(highlight));
+        return ok;
+      },
+    );
     // Gemini keeps the turn open until every tool call is answered, so reply
     // even for a call this client does not render.
     if (calls.length === 0) return;
-    if (this.socket?.readyState !== WebSocket.OPEN) return;
-    this.socket.send(
-      JSON.stringify({
-        toolResponse: {
-          functionResponses: calls.map(call => ({
-            id: call.id,
-            name: call.name,
-            response: { result: 'ok' },
-          })),
+    const send = (finished: GeminiFunctionResponse[]) => {
+      if (this.socket !== socket || socket?.readyState !== WebSocket.OPEN)
+        return;
+      const valid = finished.filter(
+        call => !call.id || !this.cancelledToolCalls.has(call.id),
+      );
+      if (valid.length)
+        socket.send(
+          JSON.stringify({ toolResponse: { functionResponses: valid } }),
+        );
+    };
+    if (calls.some(call => call.name === 'save_vocabulary')) {
+      // Do not block the incoming audio/message queue while waiting for the API.
+      void Promise.all(responses).then(send);
+    } else send(responses as GeminiFunctionResponse[]);
+  }
+
+  private async saveVocabularyTool(
+    call: GeminiFunctionCall,
+    word: VocabularyHighlight,
+  ): Promise<GeminiFunctionResponse> {
+    try {
+      const handler = [...this.saveVocabularyHandlers][0];
+      if (!handler) throw new Error('Không có bộ xử lý lưu từ');
+      await handler(word);
+      return {
+        id: call.id,
+        name: call.name,
+        response: { result: 'saved', saved: true, term: word.term },
+      };
+    } catch {
+      return {
+        id: call.id,
+        name: call.name,
+        response: {
+          result: 'error',
+          saved: false,
+          term: word.term,
+          error: 'Chưa xác nhận được lưu lên tài khoản. Hãy thử đồng bộ lại.',
         },
-      }),
-    );
+      };
+    }
   }
 
   private flushOutputTranscript() {

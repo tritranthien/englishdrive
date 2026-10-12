@@ -25,6 +25,9 @@ import { useSpeakerVerification } from './src/features/speaker-verification/useS
 import { SpeakerMatchSettings } from './src/features/speaker-verification/SpeakerMatchSettings';
 import { commuteAudio, type AssistantStatus } from './src/native/commute-audio';
 import { authSession } from './src/native/auth-session';
+import { useVocabulary } from './src/features/vocabulary/useVocabulary';
+import { VocabularyNotebook } from './src/features/vocabulary/VocabularyNotebook';
+import { vocabularyKey } from './src/features/vocabulary/vocabulary.store';
 
 const microphoneLabels = { phone: 'điện thoại', headset: 'tai nghe' } as const;
 
@@ -154,7 +157,10 @@ function AppContent() {
     useState<ConversationMode>('FREE_CONVERSATION');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const realtime = useLiveConversation();
+  const vocabularyNotebook = useVocabulary(auth?.user.id, auth?.accessToken);
+  const realtime = useLiveConversation(vocabularyNotebook.capture, word =>
+    vocabularyNotebook.save([word]),
+  );
   const speakerVerification = useSpeakerVerification();
   const liveAudioProfileKind =
     realtime.audioRoute.type === 'bluetooth' ||
@@ -491,8 +497,42 @@ function AppContent() {
                 {realtime.vocabulary.example}
               </Text>
             ) : null}
+            <Pressable
+              disabled={vocabularyNotebook.saving}
+              onPress={() => {
+                if (realtime.vocabulary) {
+                  void vocabularyNotebook
+                    .save([realtime.vocabulary])
+                    .catch(() => {});
+                }
+              }}
+              style={styles.secondaryButton}
+            >
+              <Text style={styles.secondaryButtonText}>
+                {vocabularyNotebook.saving
+                  ? 'Đang lưu từ…'
+                  : vocabularyNotebook.items.some(
+                      item =>
+                        item.key === vocabularyKey(realtime.vocabulary!.term),
+                    )
+                  ? 'Đã lưu vào sổ từ vựng'
+                  : 'Lưu từ vựng'}
+              </Text>
+            </Pressable>
           </View>
         ) : null}
+
+        <VocabularyNotebook
+          key={auth.user.id}
+          items={vocabularyNotebook.items}
+          loading={vocabularyNotebook.loading}
+          saving={vocabularyNotebook.saving}
+          error={vocabularyNotebook.error}
+          reportWords={realtime.analysis?.newVocabulary}
+          onSave={vocabularyNotebook.save}
+          onRemove={vocabularyNotebook.remove}
+          onReload={vocabularyNotebook.reload}
+        />
 
         {realtime.history.length > 0 ? (
           <View style={styles.historyPanel}>
@@ -871,7 +911,9 @@ function AppContent() {
             </View>
             <Text style={styles.panelText}>
               Bạn có thể khóa màn hình sau khi kết nối. Android sẽ hiển thị
-              thông báo khi mic đang hoạt động.
+              thông báo khi mic đang hoạt động. Khi dùng loa điện thoại, hãy đợi
+              trợ lý nói xong rồi trả lời; mic tạm ngừng thu trong lúc loa phát
+              để tránh vọng âm. Dùng tai nghe nếu muốn nói ngắt lời trợ lý.
             </Text>
             <Pressable
               disabled={authLoading || isActive || assistantStatus?.wakeArmed}

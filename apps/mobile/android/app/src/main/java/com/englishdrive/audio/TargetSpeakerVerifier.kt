@@ -6,14 +6,18 @@ import com.englishdrive.BuildConfig
 import java.io.ByteArrayOutputStream
 import kotlin.math.sqrt
 
-internal class TargetSpeakerVerifier private constructor(
-  private val engine: SherpaSpeakerEmbeddingEngine,
+internal class TargetSpeakerVerifier(
   private val profile: SpeakerProfile,
+  private val computeEmbedding: (ByteArray) -> FloatArray,
+  private val closeEngine: () -> Unit = {},
+  private val diagnosticsEnabled: Boolean = false,
 ) {
   private val speech = ByteArrayOutputStream(MAX_WINDOW_BYTES)
   private val highPass = Pcm16HighPass()
   private var totalSpeechBytes = 0
   private var bytesSinceScore = 0
+  var lastScoreSpeechMs: Int? = null
+    private set
 
   val threshold: Float
     get() = automaticThreshold(profile)
@@ -28,19 +32,29 @@ internal class TargetSpeakerVerifier private constructor(
   fun score(bytes: ByteArray): Float? {
     // Wind and road rumble are filtered out of the embedding path only, so the
     // audio forwarded to Gemini stays untouched.
-    val filtered = highPass.process(bytes)
-    if (!hasVoiceEnergy(filtered)) return null
-    append(filtered)
+    if (!collect(bytes)) return null
     if (totalSpeechBytes < INITIAL_SCORE_BYTES) return null
     if (bytesSinceScore < RESCORE_STEP_BYTES) return null
     bytesSinceScore = 0
     return computeScore()
   }
 
-  /** Short turns contain too little identity information; the gate handles continuity. */
+  /** Completed short turns get a real embedding; tiny replies still use continuity. */
   fun finishScore(): Float? {
     if (totalSpeechBytes < MIN_UTTERANCE_BYTES) return null
     return computeScore()
+  }
+
+  /** Recover voiced onset captured before VAD announced the turn. */
+  fun prime(bytes: ByteArray) {
+    collect(bytes)
+  }
+
+  private fun collect(bytes: ByteArray): Boolean {
+    val filtered = highPass.process(bytes)
+    if (!hasVoiceEnergy(filtered)) return false
+    append(filtered)
+    return true
   }
 
   private fun append(bytes: ByteArray) {
@@ -54,11 +68,12 @@ internal class TargetSpeakerVerifier private constructor(
 
   private fun computeScore(): Float {
     val bytes = speech.toByteArray()
-    val candidate = engine.compute(bytes)
+    val candidate = computeEmbedding(bytes)
+    lastScoreSpeechMs = bytes.size * 1_000 / (SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2)
     val similarities =
       profile.embeddings.map { SherpaSpeakerEmbeddingEngine.cosineSimilarity(it, candidate) }
     val similarity = similarities.maxOrNull() ?: -1f
-    if (BuildConfig.DEBUG || BuildConfig.VOICE_FILTER_DIAGNOSTICS) {
+    if (diagnosticsEnabled) {
       Log.d(
         TAG,
         "Speaker profile=${profile.kind.storageName} similarity=$similarity " +
@@ -73,11 +88,12 @@ internal class TargetSpeakerVerifier private constructor(
     highPass.reset()
     totalSpeechBytes = 0
     bytesSinceScore = 0
+    lastScoreSpeechMs = null
   }
 
   fun close() {
     speech.reset()
-    engine.close()
+    closeEngine()
   }
 
   private fun hasVoiceEnergy(bytes: ByteArray): Boolean {
@@ -101,7 +117,7 @@ internal class TargetSpeakerVerifier private constructor(
       minOf(profile.threshold, if (profile.kind == SpeakerProfileKind.HEADSET) HEADSET_MAX_THRESHOLD else PHONE_MAX_THRESHOLD)
     // Require real speech rather than repeating a short sample to satisfy input length.
     private const val INITIAL_SCORE_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2
-    private const val MIN_UTTERANCE_BYTES = INITIAL_SCORE_BYTES
+    private const val MIN_UTTERANCE_BYTES = SherpaSpeakerEmbeddingEngine.MIN_SAMPLE_BYTES
     private const val MAX_WINDOW_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2
     private const val RESCORE_STEP_BYTES = SherpaSpeakerEmbeddingEngine.SAMPLE_RATE * 2 * 2 / 10
     private const val PHONE_MIN_THRESHOLD = 0.22f
@@ -116,7 +132,12 @@ internal class TargetSpeakerVerifier private constructor(
       val profile = SpeakerProfileStore(context).load(kind) ?: return null
       val engine = SherpaSpeakerEmbeddingEngine(context)
       return try {
-        TargetSpeakerVerifier(engine, profile)
+        TargetSpeakerVerifier(
+          profile,
+          computeEmbedding = engine::compute,
+          closeEngine = engine::close,
+          diagnosticsEnabled = BuildConfig.DEBUG || BuildConfig.VOICE_FILTER_DIAGNOSTICS,
+        )
       } catch (error: Exception) {
         engine.close()
         throw error

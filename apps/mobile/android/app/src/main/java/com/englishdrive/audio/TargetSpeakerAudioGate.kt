@@ -21,6 +21,7 @@ internal class TargetSpeakerAudioGate(
   private val finishScore: () -> Float? = { null },
   private val clockMillis: () -> Long = System::currentTimeMillis,
   private val collectedSpeechBytes: (() -> Int)? = null,
+  private val primeScore: (ByteArray) -> Unit = {},
 ) {
   private val preRoll = ArrayDeque<ByteArray>()
   private val pending = ArrayDeque<ByteArray>()
@@ -54,6 +55,7 @@ internal class TargetSpeakerAudioGate(
       latestScore = null
       pending.clear()
       pending.addAll(preRoll)
+      if (threshold > 0f) preRoll.forEach(primeScore)
       preRoll.clear()
     }
 
@@ -65,9 +67,15 @@ internal class TargetSpeakerAudioGate(
     var justAccepted = false
     var acceptanceReason: String? = null
     var scoreUpdated = false
+    // Zero explicitly disables identity verification. A short first reply may
+    // never produce an embedding, so comparing scores alone cannot implement it.
+    if (!accepted && threshold == 0f) {
+      justAccepted = true
+      acceptanceReason = "threshold-disabled"
+      accepted = true
+    }
     if (!accepted) {
-      // Keep pre-roll for Gemini but exclude its mostly silent frames from the
-      // speaker embedding so short utterances are not diluted.
+      // Onset pre-roll is energy-qualified by the verifier, like later frames.
       val nextScore = score(chunk)
       if (nextScore != null) {
         latestScore = nextScore
@@ -82,21 +90,27 @@ internal class TargetSpeakerAudioGate(
       }
 
       if (!justAccepted && activityChange == false) {
+        // A short embedding is useful for the first match, but a low short
+        // score is not strong enough to invalidate a recent longer match.
+        val replyBytes = collectedSpeechBytes?.invoke() ?: speechBytes
         val finalScore = finishScore()
         if (finalScore != null) {
           latestScore = finalScore
           scoreUpdated = true
           bestScore = maxOf(bestScore ?: finalScore, finalScore)
-          if (finalScore >= threshold) {
+          // Runtime readiness does not mean a short embedding is reliable.
+          // Production supplies energy-qualified bytes; callers without a
+          // duration source retain the original score-only contract.
+          val reliable = collectedSpeechBytes == null || replyBytes >= MIN_VERIFICATION_BYTES
+          if (finalScore >= threshold && reliable) {
             justAccepted = true
             acceptanceReason = "end-of-turn-match"
-          } else {
+          } else if (finalScore < threshold && replyBytes >= MIN_VERIFICATION_BYTES) {
             lastAcceptedAt = Long.MIN_VALUE
           }
         }
         // Use the verifier's energy-qualified speech, excluding VAD's silence tail.
-        val replyBytes = collectedSpeechBytes?.invoke() ?: speechBytes
-        if (!justAccepted && bestScore == null && continuityActive() &&
+        if (!justAccepted && continuityActive() &&
           replyBytes >= MIN_SHORT_REPLY_BYTES && replyBytes < MIN_VERIFICATION_BYTES
         ) {
           justAccepted = true

@@ -31,9 +31,11 @@ jest.mock('react-native-webrtc', () => ({
 }));
 
 test('renders correctly', async () => {
-  await ReactTestRenderer.act(() => {
-    ReactTestRenderer.create(<App />);
+  let renderer!: ReactTestRenderer.ReactTestRenderer;
+  await ReactTestRenderer.act(async () => {
+    renderer = ReactTestRenderer.create(<App />);
   });
+  await ReactTestRenderer.act(async () => renderer.unmount());
 });
 
 test('reopening restores the conversation screen and logout removes the saved session', async () => {

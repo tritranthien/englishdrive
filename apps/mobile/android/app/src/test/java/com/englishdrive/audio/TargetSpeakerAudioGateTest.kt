@@ -215,7 +215,7 @@ class TargetSpeakerAudioGateTest {
     assertFalse(gate.process(byteArrayOf(2), true, null).started)
     gate.updateThreshold(0f)
     value = 0f
-    verify(gate)
+    assertTrue(gate.process(byteArrayOf(1), true, true).started)
   }
 
   @Test
@@ -285,5 +285,113 @@ class TargetSpeakerAudioGateTest {
 
     assertFalse(ended.started)
     assertTrue(ended.chunks.isEmpty())
+  }
+
+  @Test
+  fun `zero threshold releases a first short reply without computing an embedding`() {
+    val gate = TargetSpeakerAudioGate(
+      threshold = 0f,
+      score = { error("Zero threshold must not require a score") },
+      finishScore = { error("Zero threshold must not require a final score") },
+    )
+    val preRoll = byteArrayOf(1)
+    val first = byteArrayOf(2)
+    gate.process(preRoll, false, null)
+    val started = gate.process(first, true, true)
+    assertTrue(started.started)
+    assertEquals(true, started.activity)
+    assertEquals("threshold-disabled", started.reason)
+    assertNull(started.latestScore)
+    assertEquals(2, started.chunks.size)
+    assertArrayEquals(preRoll, started.chunks[0])
+    assertArrayEquals(first, started.chunks[1])
+    assertEquals(1, gate.process(byteArrayOf(3), true, null).chunks.size)
+    val ended = gate.process(byteArrayOf(4), false, false)
+    assertEquals(false, ended.activity)
+    assertFalse(ended.started)
+    assertEquals(1, ended.chunks.size)
+  }
+
+  @Test
+  fun `zero threshold keeps silence closed and can be reenabled without inherited identity`() {
+    val gate = TargetSpeakerAudioGate(score = { null }, threshold = 0f)
+    assertTrue(gate.process(byteArrayOf(1), false, null).chunks.isEmpty())
+    assertTrue(gate.process(byteArrayOf(2), true, true).started)
+    gate.process(byteArrayOf(3), false, false)
+    gate.updateThreshold(0.2f)
+    assertFalse(gate.process(ByteArray(6_400), true, true).started)
+    assertTrue(gate.process(byteArrayOf(4), false, false).chunks.isEmpty())
+    gate.updateThreshold(0f)
+    assertTrue(gate.process(byteArrayOf(5), true, true).started)
+  }
+
+  @Test
+  fun `positive threshold primes onset then compares a short first reply at its end`() {
+    val primed = mutableListOf<ByteArray>()
+    var finalScore = 0.15f
+    val gate = TargetSpeakerAudioGate(
+      score = { null }, threshold = 0.1f, primeScore = { primed += it },
+      finishScore = { finalScore },
+    )
+    gate.process(byteArrayOf(1), false, null)
+    assertTrue(gate.process(byteArrayOf(2), true, true).chunks.isEmpty())
+    assertEquals(1, primed.size)
+    assertArrayEquals(byteArrayOf(1), primed[0])
+    val accepted = gate.process(byteArrayOf(3), false, false)
+    assertTrue(accepted.started)
+    assertEquals("end-of-turn-match", accepted.reason)
+    assertEquals(0.15f, accepted.latestScore!!, 0.0001f)
+    assertEquals(3, accepted.chunks.size)
+    finalScore = 0.05f
+    gate.process(byteArrayOf(4), true, true)
+    val rejected = gate.process(byteArrayOf(5), false, false)
+    assertFalse(rejected.started)
+    assertTrue(rejected.chunks.isEmpty())
+  }
+
+  @Test
+  fun `unreliable short scores retain recent identity without extending its deadline`() {
+    var now = 1_000L
+    var score: Float? = 0.8f
+    var finalScore: Float? = null
+    val gate = TargetSpeakerAudioGate(
+      score = { score }, finishScore = { finalScore }, clockMillis = { now },
+    )
+    verify(gate)
+    score = null
+    finalScore = -0.01f
+    now += 29_000
+    gate.process(ByteArray(16_000), true, true)
+    val inherited = gate.process(byteArrayOf(1), false, false)
+    assertTrue(inherited.started)
+    assertEquals("short-reply-continuity", inherited.reason)
+    now += 1_001
+    gate.process(ByteArray(16_000), true, true)
+    assertFalse(gate.process(byteArrayOf(1), false, false).started)
+  }
+
+  @Test
+  fun `a high short score is diagnostic only and does not establish identity`() {
+    var speechBytes = 16_000
+    var streamingScore: Float? = null
+    val gate = TargetSpeakerAudioGate(
+      threshold = 0.1f, score = { streamingScore }, finishScore = { 0.67f },
+      collectedSpeechBytes = { speechBytes },
+    )
+    gate.process(ByteArray(16_000), true, true)
+    val short = gate.process(byteArrayOf(1), false, false)
+    assertEquals(0.67f, short.latestScore!!, 0.0001f)
+    assertFalse(short.started)
+    assertTrue(short.chunks.isEmpty())
+    speechBytes = 6_400
+    gate.process(ByteArray(6_400), true, true)
+    assertFalse(gate.process(byteArrayOf(1), false, false).started)
+    speechBytes = 64_000
+    streamingScore = 0.6f
+    verify(gate)
+    streamingScore = null
+    speechBytes = 16_000
+    gate.process(ByteArray(16_000), true, true)
+    assertEquals("short-reply-continuity", gate.process(byteArrayOf(1), false, false).reason)
   }
 }

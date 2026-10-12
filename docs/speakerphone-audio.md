@@ -29,6 +29,15 @@ disconnected before testing the speakerphone filter.
 
 ## Validation
 
+The Wi-Fi voice trial now uses half-duplex phone playback because strong-correlation
+echo detection missed processed loudspeaker speech. Phone microphone frames are discarded
+while PCM is queued, while written AudioTrack frames have not drained, and for a 500 ms
+echo tail. These frames do not feed VAD, voice verification or Gemini, even with a zero
+match threshold. The guard follows local playback, not Gemini's server turn completion.
+Flush/stop reset queue and frame accounting. Headset capture remains full duplex.
+On the phone loudspeaker, wait for the assistant to finish before replying; use a headset
+for interruption. Regression tests cover queued buffers, actual drain, echo tail and resets.
+
 Run `:app:testDebugUnitTest` and `:app:assembleRelease`. Regression tests cover
 delayed/attenuated echo, phase inversion, independent near-end speech, significant
 double talk, silence, reset, partial writes and circular reference storage. These

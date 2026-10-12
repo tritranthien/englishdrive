@@ -186,6 +186,7 @@ model VocabularyItem {
   id              String              @id @default(uuid())
   userId          String
   termKey         String
+  pinned          Boolean             @default(false)
   term            String
   meaningVi       String
   example         String

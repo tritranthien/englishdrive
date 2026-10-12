@@ -76,6 +76,7 @@ describe('LiveService', () => {
           {
             functionDeclarations: [
               expect.objectContaining({ name: 'show_vocabulary' }),
+              expect.objectContaining({ name: 'save_vocabulary' }),
             ],
           },
         ],

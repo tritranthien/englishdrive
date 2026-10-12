@@ -44,6 +44,30 @@ const GEMINI_LIVE_TOOLS = [
           required: ['term', 'meaningVi'],
         },
       },
+      {
+        name: 'save_vocabulary',
+        description:
+          'Save an English word or phrase in the signed-in learner account notebook when they ask to save, remember, write down, or add it. Resolve references such as that word using the conversation. Wait for the result before confirming a successful save.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            term: {
+              type: 'STRING',
+              description:
+                'The English word or phrase the learner wants saved.',
+            },
+            meaningVi: {
+              type: 'STRING',
+              description: 'A concise Vietnamese meaning.',
+            },
+            example: {
+              type: 'STRING',
+              description: 'One short English example sentence.',
+            },
+          },
+          required: ['term', 'meaningVi'],
+        },
+      },
     ],
   },
 ];

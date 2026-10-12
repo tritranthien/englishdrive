@@ -32,13 +32,23 @@ and session-resumption settings.
 
 When an enrolled speaker profile exists, Android applies a target-speaker gate after echo/noise
 processing and local VAD. If no profile exists, Android streams directly to Gemini Live. The
-bundled sherpa-onnx runtime computes a CAM++ embedding after at least 2 seconds of real speech,
-then every 200 ms using the most recent 2 seconds. It uses the profile's calibrated cosine threshold
+bundled sherpa-onnx runtime computes streaming CAM++ embeddings after 2 seconds of real speech,
+then every 200 ms using the most recent 2 seconds. At turn end it also scores shorter replies
+with at least 400 ms of energy-qualified real speech for diagnostics only: a sample under
+2 seconds cannot establish identity even if its score is high. The UI displays `sampleSpeechMs`
+and labels short scores as provisional instead of comparable to a full-length enrollment sample.
+Voiced onset from 400 ms of VAD pre-roll
+feeds the verifier so delayed speech detection does not truncate the speaker sample. Pre-roll
+silence is excluded by the same high-pass/energy check used for later frames.
+It uses the profile's calibrated cosine threshold
 (phone 0.22–0.30, headset 0.10–0.16). No short audio is repeated to manufacture model input.
-The gate buffers audio until two consecutive scores match, or a completed turn's embedding matches.
+The gate buffers audio until two consecutive scores match, or a completed turn's embedding
+matches with at least 2 seconds of real speech.
 After a verified turn, replies with 200 ms to under 2 seconds of energy-qualified speech may inherit identity at
-the end of the reply for 30 seconds. Inherited replies never extend that deadline. A scored mismatch
-clears identity; restarting capture (including microphone route changes) clears it too. Echo suppression
+the end of the reply for 30 seconds. Inherited replies never extend that deadline.
+A scored mismatch with at least 2 seconds of real speech clears identity. Low short-turn scores
+do not revoke recent identity because those embeddings vary strongly with duration;
+restarting capture (including microphone route changes) clears it too. Echo suppression
 discards buffered audio but preserves the original identity deadline through AI playback. The trade-off
 is that another person's short reply can pass during this window; this is a conversation filter.
 Enrollment and verification both high-pass the embedding input. Older capture-pipeline profiles require
@@ -56,7 +66,12 @@ Inherited/bypassed/off states never display a stale match score. Updates are emi
 computation and turn/state transitions rather than every captured audio frame.
 
 Each mic profile has a persisted optional manual threshold, adjustable from 0.00 to 1.00 in steps
-of 0.01. Manual thresholds bypass the automatic calibration caps. Resetting to automatic removes
+of 0.01. Manual thresholds bypass the automatic calibration caps.
+A manual threshold of **0.00 disables speaker identity verification**: the first
+VAD speech frame releases the buffered pre-roll immediately, even for a short first reply with
+no embedding. Local speech detection and playback echo protection remain active. The match panel
+reports `off` with reason `threshold-disabled` and no similarity score. Positive thresholds retain
+the real-speech minimum and matching/continuity rules above. Resetting to automatic removes
 the override; re-enrollment preserves it, while deleting the profile removes it. Changes during
 capture are applied at the next VAD turn start, clearing inherited identity and bypass. The UI
 shows the saved setting separately from the actual threshold until it takes effect. Settings and

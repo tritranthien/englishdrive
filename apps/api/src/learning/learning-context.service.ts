@@ -32,7 +32,11 @@ export class LearningContextService {
         take: LIMITS.mistakes,
       }),
       this.prisma.vocabularyItem.findMany({
-        where: { userId, occurrenceCount: { gt: 0 }, familiarity: { lt: 0.9 } },
+        where: {
+          userId,
+          OR: [{ occurrenceCount: { gt: 0 } }, { pinned: true }],
+          familiarity: { lt: 0.9 },
+        },
         orderBy: [{ nextReviewAt: 'asc' }, { lastSeenAt: 'desc' }],
         take: LIMITS.vocabulary,
       }),
