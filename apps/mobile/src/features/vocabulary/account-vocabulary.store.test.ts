@@ -6,6 +6,8 @@ import {
   importAccountVocabulary,
   listAccountVocabulary,
   saveAccountVocabulary,
+  assignVocabularyDeck,
+  listVocabularyDecks,
 } from '../../api/client';
 
 jest.mock('../../api/client', () => ({
@@ -13,6 +15,8 @@ jest.mock('../../api/client', () => ({
   importAccountVocabulary: jest.fn(),
   listAccountVocabulary: jest.fn(),
   saveAccountVocabulary: jest.fn(),
+  assignVocabularyDeck: jest.fn(),
+  listVocabularyDecks: jest.fn(),
 }));
 const word = {
   term: 'commute',
@@ -44,6 +48,76 @@ beforeEach(() => {
     .mockResolvedValue({ items: [remote], nextCursor: null });
   jest.mocked(saveAccountVocabulary).mockResolvedValue(remote);
   jest.mocked(importAccountVocabulary).mockResolvedValue({ imported: 1 });
+  jest.mocked(listVocabularyDecks).mockResolvedValue({
+    items: [
+      {
+        id: 'work-deck',
+        name: 'Work',
+        wordCount: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  });
+});
+
+test('manual saves retain their deck in the outbox across offline retries', async () => {
+  jest
+    .mocked(saveAccountVocabulary)
+    .mockRejectedValueOnce(new Error('Offline'));
+  await expect(
+    accountVocabularyStore.save(owner, 'token', [word], 'work-deck'),
+  ).rejects.toThrow('Offline');
+  expect((await vocabularyStore.list(`${owner}:pending`))[0].deckId).toBe(
+    'work-deck',
+  );
+  await accountVocabularyStore.list(owner, 'token');
+  expect(saveAccountVocabulary).toHaveBeenLastCalledWith('token', {
+    ...word,
+    deckId: 'work-deck',
+  });
+});
+
+test('moves by server IDs and rejects stale selected keys before sending a request', async () => {
+  jest.mocked(assignVocabularyDeck).mockResolvedValue({ moved: 1 });
+  await accountVocabularyStore.move(
+    owner,
+    'token',
+    ['commute', 'commute'],
+    'work-deck',
+  );
+  expect(assignVocabularyDeck).toHaveBeenCalledWith(
+    'token',
+    ['remote-id'],
+    'work-deck',
+  );
+  await expect(
+    accountVocabularyStore.move(owner, 'token', ['missing'], null),
+  ).rejects.toThrow('Không tìm thấy');
+  expect(assignVocabularyDeck).toHaveBeenCalledTimes(1);
+});
+
+test('a newer deck assignment survives acknowledgement of an earlier queued save', async () => {
+  const key = `${owner}:pending`;
+  const first = (
+    await vocabularyStore.save(key, [{ ...word, deckId: 'first-deck' }])
+  )[0];
+  await vocabularyStore.save(key, [{ ...word, deckId: 'second-deck' }]);
+  await vocabularyStore.acknowledge(key, first);
+  expect((await vocabularyStore.list(key))[0].deckId).toBe('second-deck');
+});
+
+test('a pending word goes to Unclassified if its deck was deleted on another device', async () => {
+  jest.mocked(listVocabularyDecks).mockResolvedValue({ items: [] });
+  await vocabularyStore.save(`${owner}:pending`, [
+    { ...word, deckId: 'deleted-deck' },
+  ]);
+  await accountVocabularyStore.list(owner, 'token');
+  expect(saveAccountVocabulary).toHaveBeenCalledWith('token', {
+    ...word,
+    deckId: null,
+  });
+  expect(await vocabularyStore.list(`${owner}:pending`)).toEqual([]);
 });
 
 test('imports legacy words once and retains the old phone backup', async () => {

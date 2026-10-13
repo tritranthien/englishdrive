@@ -60,16 +60,17 @@ enum AnalysisStatus {
 }
 
 model User {
-  id           String                @id @default(uuid())
-  email        String                @unique
-  passwordHash String
-  name         String
-  createdAt    DateTime              @default(now())
-  updatedAt    DateTime              @updatedAt
-  profile      LearningProfile?
-  sessions     ConversationSession[]
-  mistakes     Mistake[]
-  vocabulary   VocabularyItem[]
+  id              String                @id @default(uuid())
+  email           String                @unique
+  passwordHash    String
+  name            String
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  profile         LearningProfile?
+  sessions        ConversationSession[]
+  mistakes        Mistake[]
+  vocabulary      VocabularyItem[]
+  vocabularyDecks VocabularyDeck[]
 }
 
 model LearningProfile {
@@ -185,6 +186,7 @@ model SessionMistake {
 model VocabularyItem {
   id              String              @id @default(uuid())
   userId          String
+  deckId          String?
   termKey         String
   pinned          Boolean             @default(false)
   term            String
@@ -200,10 +202,26 @@ model VocabularyItem {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deck            VocabularyDeck?     @relation(fields: [deckId], references: [id], onDelete: SetNull)
   sessions        SessionVocabulary[]
 
   @@unique([userId, termKey])
+  @@index([userId, deckId])
   @@index([userId, nextReviewAt, lastSeenAt(sort: Desc)])
+}
+
+model VocabularyDeck {
+  id        String           @id @default(uuid())
+  userId    String
+  name      String
+  nameKey   String
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  words     VocabularyItem[]
+
+  @@unique([userId, nameKey])
+  @@index([userId, createdAt])
 }
 
 model SessionVocabulary {

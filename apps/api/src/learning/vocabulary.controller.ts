@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   ParseUUIDPipe,
   Post,
   Query,
@@ -17,6 +18,9 @@ import {
   vocabularyImportSchema,
   vocabularyListSchema,
   vocabularyWordSchema,
+  vocabularyDeckSchema,
+  vocabularyAssignmentSchema,
+  type VocabularyAssignmentInput,
   type VocabularyListInput,
   type VocabularyWordInput,
 } from './vocabulary.schemas.js';
@@ -56,5 +60,40 @@ export class VocabularyController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.vocabulary.remove(request.user.id, id);
+  }
+
+  @Get('decks')
+  decks(@Req() request: AuthenticatedRequest) {
+    return this.vocabulary.listDecks(request.user.id);
+  }
+  @Post('decks')
+  createDeck(
+    @Req() request: AuthenticatedRequest,
+    @Body(new ZodValidationPipe(vocabularyDeckSchema)) input: { name: string },
+  ) {
+    return this.vocabulary.createDeck(request.user.id, input.name);
+  }
+  @Patch('decks/:id')
+  renameDeck(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodValidationPipe(vocabularyDeckSchema)) input: { name: string },
+  ) {
+    return this.vocabulary.renameDeck(request.user.id, id, input.name);
+  }
+  @Delete('decks/:id')
+  deleteDeck(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.vocabulary.deleteDeck(request.user.id, id);
+  }
+  @Patch('assignment')
+  assign(
+    @Req() request: AuthenticatedRequest,
+    @Body(new ZodValidationPipe(vocabularyAssignmentSchema))
+    input: VocabularyAssignmentInput,
+  ) {
+    return this.vocabulary.assign(request.user.id, input);
   }
 }

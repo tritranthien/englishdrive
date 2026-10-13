@@ -242,7 +242,53 @@ export type AccountVocabulary = {
   example?: string;
   savedAt: number;
   updatedAt: number;
+  deckId?: string | null;
 };
+export type VocabularyDeck = {
+  id: string;
+  name: string;
+  wordCount: number;
+  createdAt: number;
+  updatedAt: number;
+};
+export function listVocabularyDecks(token: string) {
+  return apiRequest<{ items: VocabularyDeck[] }>('/vocabulary/decks', {
+    token,
+    timeoutMs: 30_000,
+  });
+}
+export function createVocabularyDeck(token: string, name: string) {
+  return apiRequest<VocabularyDeck>('/vocabulary/decks', {
+    token,
+    method: 'POST',
+    body: { name },
+    timeoutMs: 30_000,
+  });
+}
+export function renameVocabularyDeck(token: string, id: string, name: string) {
+  return apiRequest<{ updated: boolean }>(
+    `/vocabulary/decks/${encodeURIComponent(id)}`,
+    { token, method: 'PATCH', body: { name }, timeoutMs: 30_000 },
+  );
+}
+export function deleteVocabularyDeck(token: string, id: string) {
+  return apiRequest<{ deleted: boolean }>(
+    `/vocabulary/decks/${encodeURIComponent(id)}`,
+    { token, method: 'DELETE', timeoutMs: 30_000 },
+  );
+}
+export function assignVocabularyDeck(
+  token: string,
+  wordIds: string[],
+  deckId: string | null,
+) {
+  return apiRequest<{ moved: number }>('/vocabulary/assignment', {
+    token,
+    method: 'PATCH',
+    body: { wordIds, deckId },
+    timeoutMs: 30_000,
+  });
+}
 export function listAccountVocabulary(token: string, cursor?: string) {
   return apiRequest<{ items: AccountVocabulary[]; nextCursor: string | null }>(
     `/vocabulary${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
@@ -251,7 +297,12 @@ export function listAccountVocabulary(token: string, cursor?: string) {
 }
 export function saveAccountVocabulary(
   token: string,
-  word: { term: string; meaningVi: string; example?: string },
+  word: {
+    term: string;
+    meaningVi: string;
+    example?: string;
+    deckId?: string | null;
+  },
 ) {
   return apiRequest<AccountVocabulary>('/vocabulary', {
     method: 'POST',

@@ -6,7 +6,9 @@ export type SavedVocabulary = VocabularyHighlight & {
   key: string;
   savedAt: number;
   updatedAt: number;
+  deckId?: string | null;
 };
+export type VocabularyDraft = VocabularyHighlight & { deckId?: string | null };
 
 type NativeStore = {
   read(userId: string): Promise<string | null>;
@@ -60,7 +62,8 @@ async function readItems(userId: string): Promise<SavedVocabulary[]> {
         typeof item.meaningVi !== 'string' ||
         (item.example != null && typeof item.example !== 'string') ||
         !Number.isFinite(item.savedAt) ||
-        !Number.isFinite(item.updatedAt),
+        !Number.isFinite(item.updatedAt) ||
+        (item.deckId != null && typeof item.deckId !== 'string'),
     )
   )
     throw new Error('Không đọc được sổ từ vựng đã lưu');
@@ -84,7 +87,8 @@ export const vocabularyStore = {
             item.updatedAt !== expected.updatedAt ||
             item.term !== expected.term ||
             item.meaningVi !== expected.meaningVi ||
-            item.example !== expected.example,
+            item.example !== expected.example ||
+            item.deckId !== expected.deckId,
         ),
       );
     }),
@@ -104,7 +108,7 @@ export const vocabularyStore = {
       );
     }),
   list: (userId: string) => serialized(userId, () => readItems(userId)),
-  save: (userId: string, words: VocabularyHighlight[]) =>
+  save: (userId: string, words: VocabularyDraft[]) =>
     serialized(userId, async () => {
       const items = new Map(
         (await readItems(userId)).map(item => [item.key, item]),
@@ -131,6 +135,11 @@ export const vocabularyStore = {
           example: example || previous?.example,
           savedAt: previous?.savedAt ?? now,
           updatedAt: now,
+          ...(word.deckId !== undefined
+            ? { deckId: word.deckId }
+            : previous?.deckId !== undefined
+              ? { deckId: previous.deckId }
+              : {}),
         });
       }
       return writeItems(

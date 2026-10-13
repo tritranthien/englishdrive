@@ -8,8 +8,26 @@ Run Metro from the repository root with `pnpm mobile:start`, then run the Androi
 `pnpm android`. Android Studio, JDK 17+, and the Android SDK required by React Native must be
 installed locally.
 
-Realtime audio, background services, and assistant integration are intentionally deferred to
-later milestones.
+## Navigation
+
+`src/navigation/AppNavigation.tsx` uses React Navigation bottom tabs with a native stack
+for each tab. Android screens are hosted by `react-native-screens` Fragments. Conversation,
+Vocabulary, and Settings have independent navigation histories; voice settings, assistant
+setup, and conversation mode open as Settings detail screens.
+
+Vocabulary opens the list of topic decks; each deck has its own word list with search,
+manual addition, and selection for moving words. Unclassified contains existing and new
+conversation words. Deck names and memberships synchronize through the account API; the
+API migration `20261013170000_vocabulary_decks` must be deployed before this client.
+
+Authentication, the live conversation, speaker verification, and vocabulary synchronization
+stay above the navigators in `App.tsx`, so switching tabs does not stop a call. Vocabulary
+refreshes on focus and preserves search and drafts. Voice enrollment prevents switching tabs
+or leaving its detail screen until it finishes or is cancelled. Android Back pops a detail
+screen first, then returns to the Conversation tab.
+
+Run mobile tests with `pnpm --filter @english-drive/mobile test` and TypeScript checks with
+`pnpm --filter @english-drive/mobile typecheck`.
 
 > **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
 

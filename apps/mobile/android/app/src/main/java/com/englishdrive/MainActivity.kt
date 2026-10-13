@@ -1,6 +1,7 @@
 package com.englishdrive
 
 import android.os.Bundle
+import com.swmansion.rnscreens.fragment.restoration.RNScreensFragmentFactory
 import com.englishdrive.assistant.EnglishDriveVoiceInteractionService
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -10,6 +11,7 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 class MainActivity : ReactActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    supportFragmentManager.fragmentFactory = RNScreensFragmentFactory()
     super.onCreate(savedInstanceState)
     if (intent.getBooleanExtra(
         EnglishDriveVoiceInteractionService.EXTRA_LAUNCHED_FROM_KEYGUARD,

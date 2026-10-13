@@ -9,3 +9,9 @@ English Drive bundles the following components for on-device speaker verificatio
 
 The bundled copy of the license is available in
 [`third_party/LICENSE-APACHE-2.0.txt`](third_party/LICENSE-APACHE-2.0.txt).
+
+
+The mobile interface also bundles React Navigation, react-native-screens,
+react-native-svg, and Lucide icons. Their MIT/ISC license notices, including the
+Feather attribution for applicable Lucide icons, are included in the APK as
+[`navigation_licenses.txt`](apps/mobile/android/app/src/main/assets/navigation_licenses.txt).

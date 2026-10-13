@@ -61,8 +61,8 @@ export function useVocabulary(userId?: string, token?: string) {
     [userId, token],
   );
   const save = useCallback(
-    (words: VocabularyHighlight[]) =>
-      run(id => accountVocabularyStore.save(id, token!, words)),
+    (words: VocabularyHighlight[], deckId?: string | null) =>
+      run(id => accountVocabularyStore.save(id, token!, words, deckId)),
     [run, token],
   );
   const remove = useCallback(
@@ -71,6 +71,11 @@ export function useVocabulary(userId?: string, token?: string) {
   );
   const reload = useCallback(
     () => run(id => accountVocabularyStore.list(id, token!)),
+    [run, token],
+  );
+  const move = useCallback(
+    (keys: string[], deckId: string | null) =>
+      run(id => accountVocabularyStore.move(id, token!, keys, deckId)),
     [run, token],
   );
   const capture = useCallback(
@@ -88,5 +93,6 @@ export function useVocabulary(userId?: string, token?: string) {
     remove,
     reload,
     capture,
+    move,
   };
 }

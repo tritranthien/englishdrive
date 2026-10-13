@@ -28,3 +28,6 @@ apps/mobile/android/app/.cxx/
 
 # Prisma
 apps/api/prisma/dev.db
+
+# Android build packages
+*.apk

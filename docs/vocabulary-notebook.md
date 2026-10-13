@@ -25,6 +25,36 @@ Endpoints protected by AuthGuard:
 - `POST /vocabulary/import`: `{words: [...]}`; up to 100 words per transaction.
 - `DELETE /vocabulary/:id`: idempotent deletion scoped to the authenticated user.
 
+## Vocabulary decks
+
+The Vocabulary tab displays account-owned topic decks. Each word belongs to one
+deck; existing words and new automatic conversation saves appear in the built-in
+Unclassified deck until the user moves them. Users can create and rename decks,
+add words directly inside a deck, and select up to 100 words to move at once.
+Search within a deck, drafts, and navigation history survive tab changes.
+
+Additional authenticated endpoints:
+
+- `GET /vocabulary/decks`: lists the owner's named decks with word counts.
+- `POST /vocabulary/decks`: `{name}`; creates a deck with an account-unique name.
+- `PATCH /vocabulary/decks/:id`: `{name}`; renames an owned deck.
+- `DELETE /vocabulary/decks/:id`: deletes an owned deck; its words return to Unclassified.
+- `PATCH /vocabulary/assignment`: `{wordIds, deckId}`; atomically moves 1–100 owned
+  words to an owned deck, or to Unclassified when `deckId` is `null`.
+- `POST /vocabulary` also accepts optional `deckId`. Omission preserves membership
+  when an existing word is captured again; explicit `null` returns it to Unclassified.
+
+Migration `20261013170000_vocabulary_decks` adds `VocabularyDeck` and a nullable
+`VocabularyItem.deckId` foreign key with `ON DELETE SET NULL`. Existing words and
+learning-memory links remain intact. Assignment pins words so session reanalysis
+cannot discard a word that the user deliberately organized. Older mobile clients
+remain compatible with the expanded word response.
+
+Pending manual saves retain their requested deck in the outbox. If that deck is
+deleted on another device before synchronization, the word is saved to
+Unclassified. A stale acknowledgement cannot remove a newer pending assignment.
+Deploy the API and this migration before installing the deck-enabled mobile APK.
+
 The existing `VocabularyItem` table is shared with post-session learning memory.
 Migration `20261012160000_vocabulary_notebook` adds `pinned BOOLEAN DEFAULT false`.
 Explicit and live saves pin items so reanalysis cannot remove them when their last
