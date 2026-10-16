@@ -12,6 +12,7 @@ import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
@@ -19,6 +20,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.ByteArrayOutputStream
 import kotlin.concurrent.thread
@@ -30,6 +32,12 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
   @Volatile private var enrollmentRecord: AudioRecord? = null
   @Volatile private var enrollmentKind: SpeakerProfileKind? = null
   private var enrollmentThread: Thread? = null
+  @Volatile private var enrollmentProgress = 0
+  @Volatile private var enrollmentPhase = "preparing"
+  @Volatile private var enrollmentCapturedMs = 0
+  @Volatile private var enrollmentRemainingMs = ENROLLMENT_TIMEOUT_MS.toInt()
+  @Volatile private var enrollmentLevel = 0.0
+  @Volatile private var enrollmentSpeechDetected = false
   private val profileStore = SpeakerProfileStore(reactContext)
 
   override fun getName() = "SpeakerVerification"
@@ -74,13 +82,19 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       promise.reject("MICROPHONE_PERMISSION_REQUIRED", "Microphone permission is required")
       return
     }
-    if (enrollmentRunning || !MicrophoneLease.acquire(ENROLLMENT_OWNER)) {
+    if (enrollmentRunning || enrollmentThread?.isAlive == true || !MicrophoneLease.acquire(ENROLLMENT_OWNER)) {
       promise.reject("MICROPHONE_BUSY", "The microphone is already in use")
       return
     }
 
     enrollmentRunning = true
     enrollmentKind = requestedKind
+    enrollmentProgress = 0
+    enrollmentCapturedMs = 0
+    enrollmentRemainingMs = ENROLLMENT_TIMEOUT_MS.toInt()
+    enrollmentLevel = 0.0
+    enrollmentSpeechDetected = false
+    emitProgress(0, "preparing")
     enrollmentThread =
       thread(start = true, name = "englishdrive-speaker-enrollment") {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
@@ -131,8 +145,10 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
     val previousAudioMode = audioManager.mode
     val previousCommunicationDevice =
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) audioManager.communicationDevice else null
+    var failure: Exception? = null
     try {
       engine = SherpaSpeakerEmbeddingEngine(reactContext)
+      if (!enrollmentRunning) throw EnrollmentCancelledException()
 
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val desiredDevice =
@@ -223,25 +239,40 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       var segmentSquareSum = 0.0
       var segmentSamples = 0
       val buffer = ByteArray(INPUT_CHUNK_BYTES)
-      val deadline = System.currentTimeMillis() + ENROLLMENT_TIMEOUT_MS
-      var lastReported = -1
+      val deadline = SystemClock.elapsedRealtime() + ENROLLMENT_TIMEOUT_MS
+      var lastReportedAt = 0L
       record.startRecording()
-      emitProgress(0)
+      check(record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+        "Could not start microphone for voice enrollment"
+      }
+      emitProgress(0, "listening")
       while (
         enrollmentRunning &&
           embeddings.size < ENROLLMENT_SEGMENTS &&
-          System.currentTimeMillis() < deadline
+          SystemClock.elapsedRealtime() < deadline
       ) {
         val count = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
-        if (count <= 0) continue
+        if (!enrollmentRunning) throw EnrollmentCancelledException()
+        check(count > 0) { "Microphone read failed ($count). Please try again." }
         val filtered = highPass.process(buffer.copyOf(count))
-        val rms = speechRms(filtered, filtered.size) ?: continue
+        val rms = speechRms(filtered, filtered.size) ?: 0.0
+        enrollmentLevel = (rms / 3000.0).coerceIn(0.0, 1.0)
+        enrollmentSpeechDetected = rms >= MIN_ENROLLMENT_RMS
+        enrollmentRemainingMs = (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0).toInt()
+        if (!enrollmentSpeechDetected) {
+          if (SystemClock.elapsedRealtime() - lastReportedAt >= 250) {
+            emitProgress(enrollmentProgress, "listening")
+            lastReportedAt = SystemClock.elapsedRealtime()
+          }
+          continue
+        }
         segmentSquareSum += rms * rms
         segmentSamples += 1
 
         val remaining = ENROLLMENT_SEGMENT_BYTES - segment.size()
         segment.write(filtered, 0, minOf(filtered.size, remaining))
         if (segment.size() >= ENROLLMENT_SEGMENT_BYTES) {
+          emitProgress(enrollmentProgress, "processing")
           embeddings += engine.compute(segment.toByteArray())
           segmentLevels +=
             if (segmentSamples == 0) 0.0 else sqrt(segmentSquareSum / segmentSamples)
@@ -253,10 +284,12 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
           embeddings.size * ENROLLMENT_SEGMENT_BYTES + segment.size()
         val rounded =
           (capturedBytes * 100 / (ENROLLMENT_SEGMENT_BYTES * ENROLLMENT_SEGMENTS))
-            .coerceIn(0, 100)
-        if (rounded != lastReported) {
-          lastReported = rounded
-          emitProgress(rounded)
+            .coerceIn(0, 99)
+        enrollmentCapturedMs = capturedBytes * 1000 / (SAMPLE_RATE * 2)
+        enrollmentProgress = rounded
+        if (SystemClock.elapsedRealtime() - lastReportedAt >= 250 || embeddings.size == ENROLLMENT_SEGMENTS) {
+          lastReportedAt = SystemClock.elapsedRealtime()
+          emitProgress(rounded, "listening")
         }
       }
       if (!enrollmentRunning) throw EnrollmentCancelledException()
@@ -277,6 +310,8 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
         "Voice enrollment was unclear. Move closer to the phone, keep quiet around you, and speak naturally for the whole capture."
       }
 
+      if (!enrollmentRunning) throw EnrollmentCancelledException()
+      emitProgress(99, "saving")
       profileStore.save(
         SpeakerProfile(
           kind = requestedKind,
@@ -292,14 +327,9 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       ) {
         profileStore.clearLegacy()
       }
-      emitProgress(100)
-      enrollmentRunning = false
-      enrollmentKind = null
-      promise.resolve(statusMap())
-    } catch (_: EnrollmentCancelledException) {
-      promise.reject("ENROLLMENT_CANCELLED", "Voice enrollment was cancelled")
+      // 100% means the profile has actually been saved, not merely captured.
     } catch (error: Exception) {
-      promise.reject("VOICE_ENROLLMENT_FAILED", error)
+      failure = error
     } finally {
       enrollmentRunning = false
       enrollmentKind = null
@@ -319,6 +349,17 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       }
       audioManager.mode = previousAudioMode
       MicrophoneLease.release(ENROLLMENT_OWNER)
+    }
+    // Settle only after releasing the microphone and restoring the audio route.
+    val error = failure
+    if (error == null) {
+      emitProgress(100, "saving")
+      promise.resolve(statusMap())
+    } else if (error is EnrollmentCancelledException) {
+      promise.reject("ENROLLMENT_CANCELLED", "Voice enrollment was cancelled")
+    } else {
+      Log.e(TAG, "Voice enrollment failed", error)
+      promise.reject("VOICE_ENROLLMENT_FAILED", error)
     }
   }
 
@@ -341,6 +382,7 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       putBoolean("headsetEnrolled", profileStore.hasProfile(SpeakerProfileKind.HEADSET))
       putBoolean("needsReenrollment", profileStore.hasLegacyProfile())
       putBoolean("enrolling", enrollmentRunning)
+      if (enrollmentRunning) putMap("enrollment", enrollmentProgressMap())
       putString("enrollingKind", enrollmentKind?.storageName)
       putString("currentRouteKind", SpeakerAudioRouteResolver.current(reactContext).kind.storageName)
       putMap("thresholds", Arguments.createMap().apply {
@@ -358,11 +400,23 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
       })
     }
 
-  private fun emitProgress(progress: Int) {
+  private fun enrollmentProgressMap(): WritableMap = Arguments.createMap().apply {
+    putInt("progress", enrollmentProgress)
+    putString("phase", enrollmentPhase)
+    putInt("capturedMs", enrollmentCapturedMs)
+    putInt("targetMs", ENROLLMENT_SEGMENT_BYTES * ENROLLMENT_SEGMENTS * 1000 / (SAMPLE_RATE * 2))
+    putInt("remainingMs", enrollmentRemainingMs)
+    putDouble("level", enrollmentLevel)
+    putBoolean("speechDetected", enrollmentSpeechDetected)
+  }
+
+  private fun emitProgress(progress: Int, phase: String) {
+    enrollmentProgress = progress
+    enrollmentPhase = phase
     if (!reactContext.hasActiveReactInstance()) return
     reactContext
       .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-      .emit(EVENT_PROGRESS, progress)
+      .emit(EVENT_PROGRESS, enrollmentProgressMap())
   }
 
   private fun stopEnrollment() {
@@ -372,10 +426,10 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
     } catch (_: IllegalStateException) {
     }
     if (enrollmentThread != Thread.currentThread()) enrollmentThread?.join(500)
-    enrollmentThread = null
+    if (enrollmentThread?.isAlive != true) enrollmentThread = null
   }
 
-  /** Returns the chunk RMS when it carries enough speech energy to enroll with. */
+  /** Returns the raw RMS, including quiet input so the UI can report mic levels. */
   private fun speechRms(bytes: ByteArray, count: Int): Double? {
     var total = 0.0
     var samples = 0
@@ -389,7 +443,7 @@ class SpeakerVerificationModule(private val reactContext: ReactApplicationContex
     }
     if (samples == 0) return null
     val rms = sqrt(total / samples)
-    return if (rms >= MIN_ENROLLMENT_RMS) rms else null
+    return rms
   }
 
   override fun invalidate() {

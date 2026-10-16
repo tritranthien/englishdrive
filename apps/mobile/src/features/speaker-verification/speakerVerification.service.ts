@@ -1,6 +1,7 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 export type SpeakerVerificationStatus = {
+  enrollment?: EnrollmentProgress;
   configured: boolean;
   phoneEnrolled: boolean;
   headsetEnrolled: boolean;
@@ -9,6 +10,16 @@ export type SpeakerVerificationStatus = {
   enrollingKind?: SpeakerProfileKind;
   currentRouteKind: SpeakerProfileKind;
   thresholds: Record<SpeakerProfileKind, SpeakerThresholdSettings>;
+};
+
+export type EnrollmentProgress = {
+  progress: number;
+  phase: 'preparing' | 'listening' | 'processing' | 'saving';
+  capturedMs: number;
+  targetMs: number;
+  remainingMs: number;
+  level: number;
+  speechDetected: boolean;
 };
 
 export type SpeakerThresholdSettings = {
@@ -22,7 +33,14 @@ export type SpeakerMatchEvent = {
   profileKind: SpeakerProfileKind;
   score: number | null;
   threshold: number | null;
-  decision: 'waiting' | 'matching' | 'accepted' | 'rejected' | 'continuity' | 'bypassed' | 'off';
+  decision:
+    | 'waiting'
+    | 'matching'
+    | 'accepted'
+    | 'rejected'
+    | 'continuity'
+    | 'bypassed'
+    | 'off';
   reason?: string | null;
 };
 
@@ -30,7 +48,10 @@ export type SpeakerProfileKind = 'phone' | 'headset';
 
 type SpeakerVerificationNativeModule = {
   getStatus(): Promise<SpeakerVerificationStatus>;
-  setThreshold(kind: SpeakerProfileKind, value: number | null): Promise<SpeakerVerificationStatus>;
+  setThreshold(
+    kind: SpeakerProfileKind,
+    value: number | null,
+  ): Promise<SpeakerVerificationStatus>;
   startEnrollment(kind: SpeakerProfileKind): Promise<SpeakerVerificationStatus>;
   cancelEnrollment(): Promise<SpeakerVerificationStatus>;
   deleteProfile(kind: SpeakerProfileKind): Promise<SpeakerVerificationStatus>;
@@ -59,11 +80,23 @@ export const speakerVerificationService = {
   cancelEnrollment: () => requireModule().cancelEnrollment(),
   deleteProfile: (kind: SpeakerProfileKind) =>
     requireModule().deleteProfile(kind),
-  onProgress(handler: (progress: number) => void) {
+  onProgress(handler: (progress: EnrollmentProgress) => void) {
     const emitter = new NativeEventEmitter(requireModule());
     return emitter.addListener('speakerEnrollmentProgress', (...args) => {
-      const progress = typeof args[0] === 'number' ? args[0] : 0;
-      handler(Math.max(0, Math.min(100, progress)));
+      const event = args[0];
+      if (event && typeof event === 'object') {
+        handler(event as EnrollmentProgress);
+      } else if (typeof event === 'number') {
+        handler({
+          progress: Math.max(0, Math.min(100, event)),
+          phase: 'listening',
+          capturedMs: event * 100,
+          targetMs: 10000,
+          remainingMs: 90000,
+          level: 0,
+          speechDetected: event > 0,
+        });
+      }
     });
   },
 };
