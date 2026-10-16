@@ -26,6 +26,7 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    com.englishdrive.chat.ChatNotificationState.initialize(this)
     // Some mobile Wi-Fi networks advertise IPv6 without a working route to
     // Gemini. Prefer IPv4 for this host while retaining IPv6 as a fallback.
     OkHttpClientProvider.setOkHttpClientFactory {

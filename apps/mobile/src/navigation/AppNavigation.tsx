@@ -1,10 +1,17 @@
-import React, { createContext, useCallback, useContext } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+} from 'react';
+import { AppState, StyleSheet, Text, View } from 'react-native';
 import {
   DarkTheme,
   NavigationContainer,
   useFocusEffect,
   usePreventRemove,
+  useNavigationContainerRef,
+  type NavigatorScreenParams,
 } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
@@ -15,6 +22,20 @@ import {
 import BookOpen from 'lucide-react-native/icons/book-open';
 import MessageCircle from 'lucide-react-native/icons/message-circle';
 import Settings from 'lucide-react-native/icons/settings';
+import MessagesSquare from 'lucide-react-native/icons/messages-square';
+import { useChat, type ChatSession } from '../features/chat/useChat';
+import { chatApi } from '../features/chat/chat.api';
+import { chatNotifications } from '../features/chat/chat.notifications';
+import {
+  ChatInboxScreen,
+  ChatPeopleScreen,
+  ChatThreadScreen,
+  CharacterEditorScreen,
+} from '../features/chat/ChatScreens';
+import {
+  ChatPreferencesScreen,
+  ChatThreadSettingsScreen,
+} from '../features/chat/ChatSettingsScreens';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConversationScreen } from '../screens/ConversationScreen';
 import {
@@ -32,8 +53,17 @@ import {
 
 type Tabs = {
   Conversation: undefined;
+  Messages: NavigatorScreenParams<MessageRoutes> | undefined;
   Vocabulary: undefined;
   Settings: undefined;
+};
+type MessageRoutes = {
+  MessagesHome: undefined;
+  ChatPeople: undefined;
+  CharacterEditor: { characterId?: string };
+  ChatThread: { threadId: string };
+  GroupEditor: undefined;
+  ChatOptions: { threadId: string };
 };
 type ConversationRoutes = { ConversationHome: undefined };
 type VocabularyRoutes = {
@@ -45,6 +75,7 @@ type SettingsRoutes = {
   VoiceSettings: undefined;
   AssistantSettings: undefined;
   ConversationMode: undefined;
+  ChatPreferences: undefined;
 };
 
 type Props = {
@@ -54,13 +85,19 @@ type Props = {
   refreshAssistantStatus: () => Promise<void>;
 };
 
-const SessionContext = createContext<Props | null>(null);
+const SessionContext = createContext<(Props & { chat: ChatSession }) | null>(
+  null,
+);
 const Tab = createBottomTabNavigator<Tabs>();
 const ConversationStack = createNativeStackNavigator<ConversationRoutes>();
 const VocabularyStack = createNativeStackNavigator<VocabularyRoutes>();
 const SettingsStack = createNativeStackNavigator<SettingsRoutes>();
+const MessagesStack = createNativeStackNavigator<MessageRoutes>();
 type TabIconProps = { color: string; size: number };
 const tabIcons = {
+  Messages: ({ color, size }: TabIconProps) => (
+    <MessagesSquare color={color} size={size} strokeWidth={1.8} />
+  ),
   Conversation: ({ color, size }: TabIconProps) => (
     <MessageCircle color={color} size={size} strokeWidth={1.8} />
   ),
@@ -199,6 +236,135 @@ function ModeContent() {
   return <ConversationModeScreen {...settings} onOpen={() => {}} />;
 }
 
+function MessagesHome({
+  navigation,
+}: NativeStackScreenProps<MessageRoutes, 'MessagesHome'>) {
+  const { chat } = useSession();
+  return (
+    <ChatInboxScreen
+      chat={chat}
+      onOpen={threadId => navigation.navigate('ChatThread', { threadId })}
+      onPeople={() => navigation.navigate('ChatPeople')}
+      onGroup={() => navigation.navigate('GroupEditor')}
+    />
+  );
+}
+function PeopleContent({
+  navigation,
+}: NativeStackScreenProps<MessageRoutes, 'ChatPeople'>) {
+  const { chat, conversation } = useSession();
+  return (
+    <ChatPeopleScreen
+      auth={conversation.auth}
+      chat={chat}
+      onOpen={threadId => navigation.navigate('ChatThread', { threadId })}
+      onEdit={characterId =>
+        navigation.navigate('CharacterEditor', { characterId })
+      }
+    />
+  );
+}
+function CharacterContent({
+  navigation,
+  route,
+}: NativeStackScreenProps<MessageRoutes, 'CharacterEditor'>) {
+  const { conversation } = useSession();
+  return (
+    <CharacterEditorScreen
+      auth={conversation.auth}
+      characterId={route.params.characterId}
+      onDone={() => navigation.goBack()}
+    />
+  );
+}
+function ThreadContent({
+  navigation,
+  route,
+}: NativeStackScreenProps<MessageRoutes, 'ChatThread'>) {
+  const { chat, conversation } = useSession();
+  return (
+    <ChatThreadScreen
+      key={route.params.threadId}
+      auth={conversation.auth}
+      chat={chat}
+      threadId={route.params.threadId}
+      onSettings={() => navigation.navigate('ChatOptions', route.params)}
+    />
+  );
+}
+function GroupContent({
+  navigation,
+}: NativeStackScreenProps<MessageRoutes, 'GroupEditor'>) {
+  const { chat, conversation } = useSession();
+  return (
+    <ChatThreadSettingsScreen
+      auth={conversation.auth}
+      chat={chat}
+      onDone={threadId => navigation.replace('ChatThread', { threadId })}
+      onEditCharacter={characterId =>
+        navigation.navigate('CharacterEditor', { characterId })
+      }
+    />
+  );
+}
+function ChatOptionsContent({
+  navigation,
+  route,
+}: NativeStackScreenProps<MessageRoutes, 'ChatOptions'>) {
+  const { chat, conversation } = useSession();
+  return (
+    <ChatThreadSettingsScreen
+      auth={conversation.auth}
+      chat={chat}
+      threadId={route.params.threadId}
+      onDone={() => navigation.goBack()}
+      onEditCharacter={characterId =>
+        navigation.navigate('CharacterEditor', { characterId })
+      }
+    />
+  );
+}
+function ChatPreferencesContent() {
+  const { conversation } = useSession();
+  return <ChatPreferencesScreen auth={conversation.auth} />;
+}
+function MessagesNavigator() {
+  return (
+    <MessagesStack.Navigator screenOptions={stackOptions}>
+      <MessagesStack.Screen
+        name="MessagesHome"
+        component={MessagesHome}
+        options={{ title: 'Tin nhắn' }}
+      />
+      <MessagesStack.Screen
+        name="ChatPeople"
+        component={PeopleContent}
+        options={{ title: 'Bạn bè AI' }}
+      />
+      <MessagesStack.Screen
+        name="CharacterEditor"
+        component={CharacterContent}
+        options={{ title: 'Hồ sơ nhân vật' }}
+      />
+      <MessagesStack.Screen
+        name="ChatThread"
+        component={ThreadContent}
+        options={{ title: 'Trò chuyện' }}
+      />
+      <MessagesStack.Screen
+        name="GroupEditor"
+        component={GroupContent}
+        options={{ title: 'Tạo nhóm bạn' }}
+      />
+      <MessagesStack.Screen
+        name="ChatOptions"
+        component={ChatOptionsContent}
+        options={{ title: 'Tùy chọn chat' }}
+      />
+    </MessagesStack.Navigator>
+  );
+}
+
 function ConversationNavigator() {
   return (
     <ConversationStack.Navigator screenOptions={stackOptions}>
@@ -263,15 +429,62 @@ function SettingsNavigator() {
         component={ModeContent}
         options={{ title: 'Chế độ hội thoại' }}
       />
+      <SettingsStack.Screen
+        name="ChatPreferences"
+        component={ChatPreferencesContent}
+        options={{ title: 'Bạn bè & tin nhắn' }}
+      />
     </SettingsStack.Navigator>
   );
 }
 
 export function AppNavigation(props: Props) {
   const insets = useSafeAreaInsets();
+  const chat = useChat(props.conversation.auth);
+  const refreshChat = chat.refresh;
+  const navigation = useNavigationContainerRef<Tabs>();
+  const { id: userId } = props.conversation.auth.user;
+  const token = props.conversation.auth.accessToken;
+  const enrolling = props.conversation.isEnrolling;
+  const openNotification = useCallback(async () => {
+    if (!navigation.isReady() || enrolling) return;
+    const threadId = await chatNotifications.consumeOpen(userId);
+    if (!threadId) return;
+    try {
+      await chatApi.thread(token, threadId);
+      navigation.navigate('Messages', {
+        screen: 'ChatThread',
+        params: { threadId },
+      });
+    } catch {
+      /* Never open another account's conversation. The inbox remains available. */
+    }
+  }, [navigation, userId, token, enrolling]);
+  useEffect(() => {
+    const update = () => {
+      void chatNotifications.register(userId, token).catch(() => {});
+      void openNotification();
+      void refreshChat();
+    };
+    update();
+    const subscription = chatNotifications.subscribe(update);
+    const state = AppState.addEventListener('change', value => {
+      if (value === 'active') update();
+    });
+    return () => {
+      subscription.remove();
+      state.remove();
+    };
+  }, [userId, token, openNotification, refreshChat]);
   return (
-    <SessionContext.Provider value={props}>
-      <NavigationContainer theme={theme}>
+    <SessionContext.Provider value={{ ...props, chat }}>
+      <NavigationContainer
+        theme={theme}
+        ref={navigation}
+        onReady={() => {
+          void openNotification();
+        }}
+      >
         <Tab.Navigator
           initialRouteName="Conversation"
           backBehavior="initialRoute"
@@ -307,6 +520,15 @@ export function AppNavigation(props: Props) {
             options={{
               title: 'Hội thoại',
               tabBarAccessibilityLabel: 'Hội thoại',
+            }}
+          />
+          <Tab.Screen
+            name="Messages"
+            component={MessagesNavigator}
+            options={{
+              title: 'Tin nhắn',
+              tabBarAccessibilityLabel: 'Tin nhắn',
+              tabBarBadge: chat.unread || undefined,
             }}
           />
           <Tab.Screen

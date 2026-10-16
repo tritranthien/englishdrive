@@ -79,6 +79,10 @@ def enableProguardInReleaseBuilds = false
  * this variant is about 6MiB larger per architecture than default.
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+// Firebase is optional for local builds. Configure with the Firebase console's Android file.
+def firebaseFile = file('google-services.json')
+def firebaseConfig = firebaseFile.exists() ? new groovy.json.JsonSlurper().parse(firebaseFile) : [:]
+def firebaseClient = firebaseConfig.client?.find { it.client_info?.android_client_info?.package_name == 'com.englishdrive' }
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -88,11 +92,15 @@ android {
     namespace "com.englishdrive"
     defaultConfig {
         applicationId "com.englishdrive"
+        buildConfigField "String", "FIREBASE_APP_ID", groovy.json.JsonOutput.toJson(firebaseClient?.client_info?.mobilesdk_app_id ?: '')
+        buildConfigField "String", "FIREBASE_API_KEY", groovy.json.JsonOutput.toJson(firebaseClient?.api_key?.getAt(0)?.current_key ?: '')
+        buildConfigField "String", "FIREBASE_PROJECT_ID", groovy.json.JsonOutput.toJson(firebaseConfig.project_info?.project_id ?: '')
+        buildConfigField "String", "FIREBASE_SENDER_ID", groovy.json.JsonOutput.toJson(firebaseConfig.project_info?.project_number ?: '')
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
+        versionCode 3
         def voiceDiagnostics = providers.gradleProperty("voiceFilterDiagnostics").orElse("false").get().toBoolean()
-        versionName voiceDiagnostics ? "1.1-voice-trial" : "1.1"
+        versionName voiceDiagnostics ? "1.2-voice-trial" : "1.2"
         buildConfigField "boolean", "VOICE_FILTER_DIAGNOSTICS", voiceDiagnostics.toString()
     }
     signingConfigs {
@@ -120,6 +128,8 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    implementation(platform("com.google.firebase:firebase-bom:34.0.0"))
+    implementation("com.google.firebase:firebase-messaging")
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     testImplementation("junit:junit:4.13.2")
 

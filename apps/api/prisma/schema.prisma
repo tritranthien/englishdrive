@@ -71,6 +71,136 @@ model User {
   mistakes        Mistake[]
   vocabulary      VocabularyItem[]
   vocabularyDecks VocabularyDeck[]
+  chatCharacters  ChatCharacter[]
+  chatThreads     ChatThread[]
+  chatPreferences ChatPreferences?
+  chatDevices     ChatDevice[]
+}
+
+model ChatCharacter {
+  id            String        @id @default(uuid())
+  userId        String
+  templateId    String?
+  name          String
+  age           Int
+  gender        String
+  occupation    String
+  bio           String
+  personality   String
+  interests     String
+  speakingStyle String
+  color         String        @default("#55ddb6")
+  archived      Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  memberships   ChatMember[]
+  messages      ChatMessage[]
+
+  @@unique([userId, templateId])
+  @@index([userId, archived])
+}
+
+model ChatPreferences {
+  userId     String   @id
+  enabled    Boolean  @default(true)
+  minMinutes Int      @default(120)
+  maxMinutes Int      @default(360)
+  dailyLimit Int      @default(6)
+  quietStart Int      @default(22)
+  quietEnd   Int      @default(8)
+  timezone   String   @default("Asia/Ho_Chi_Minh")
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ChatThread {
+  id                String        @id @default(uuid())
+  userId            String
+  kind              String
+  title             String
+  directCharacterId String?
+  romance           Boolean       @default(false)
+  archived          Boolean       @default(false)
+  muted             Boolean       @default(false)
+  proactiveEnabled  Boolean       @default(true)
+  minMinutes        Int?
+  maxMinutes        Int?
+  nextProactiveAt   DateTime
+  unattendedRounds  Int           @default(0)
+  lastReadSequence  Int           @default(0)
+  lastSequence      Int           @default(0)
+  repliedThrough    Int           @default(0)
+  memory            String        @default("")
+  memoryThrough     Int           @default(0)
+  revision          Int           @default(0)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  members           ChatMember[]
+  messages          ChatMessage[]
+  jobs              ChatJob[]
+
+  @@unique([userId, directCharacterId])
+  @@index([userId, updatedAt(sort: Desc)])
+  @@index([archived, nextProactiveAt])
+}
+
+model ChatMember {
+  threadId    String
+  characterId String
+  thread      ChatThread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  character   ChatCharacter @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@id([threadId, characterId])
+}
+
+model ChatMessage {
+  id              String         @id @default(uuid())
+  threadId        String
+  sequence        Int
+  clientMessageId String?
+  characterId     String?
+  role            String
+  content         String
+  createdAt       DateTime       @default(now())
+  thread          ChatThread     @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  character       ChatCharacter? @relation(fields: [characterId], references: [id], onDelete: SetNull)
+
+  @@unique([threadId, sequence])
+  @@unique([threadId, clientMessageId])
+}
+
+model ChatJob {
+  id              String     @id @default(uuid())
+  threadId        String
+  key             String     @unique
+  kind            String
+  status          String     @default("PENDING")
+  triggerSequence Int        @default(0)
+  dueAt           DateTime
+  attempts        Int        @default(0)
+  leaseUntil      DateTime?
+  leaseToken      String?
+  payload         Json?
+  error           String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  thread          ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([status, dueAt])
+  @@index([threadId, kind, createdAt])
+}
+
+model ChatDevice {
+  id             String   @id @default(uuid())
+  userId         String
+  token          String   @unique
+  installationId String   @unique
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model LearningProfile {

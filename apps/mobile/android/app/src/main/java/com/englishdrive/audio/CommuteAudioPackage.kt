@@ -13,6 +13,8 @@ class CommuteAudioPackage : ReactPackage {
       SpeakerVerificationModule(reactContext),
       AuthSessionModule(reactContext),
       VocabularyStorageModule(reactContext),
+      com.englishdrive.chat.ChatStorageModule(reactContext),
+      com.englishdrive.chat.ChatNotificationsModule(reactContext),
     )
 
   override fun createViewManagers(

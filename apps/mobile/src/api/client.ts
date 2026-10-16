@@ -106,7 +106,7 @@ type RequestOptions = {
   timeoutMs?: number;
 };
 
-async function apiRequest<T>(
+export async function apiRequest<T>(
   path: string,
   { method = 'GET', token, body, timeoutMs }: RequestOptions = {},
 ): Promise<T> {

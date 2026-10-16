@@ -25,6 +25,7 @@ import { authSession } from './src/native/auth-session';
 import { useVocabulary } from './src/features/vocabulary/useVocabulary';
 import { useVocabularyDecks } from './src/features/vocabulary/useVocabularyDecks';
 import { AppNavigation } from './src/navigation/AppNavigation';
+import { chatNotifications } from './src/features/chat/chat.notifications';
 import { styles } from './src/screens/styles';
 
 function AppContent() {
@@ -198,6 +199,9 @@ function AppContent() {
     setAuthLoading(true);
     setAssistantError(undefined);
     try {
+      await chatNotifications
+        .clear(auth?.accessToken, auth?.user.id)
+        .catch(() => {});
       await authSession.clear();
       setAuth(undefined);
       setPassword('');

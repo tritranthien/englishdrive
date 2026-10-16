@@ -2,6 +2,10 @@ This is a new [**React Native**](https://reactnative.dev) project, bootstrapped 
 
 # English Drive Mobile
 
+The **Tin nhắn** tab supports fictional AI friends, private/group text conversations, custom
+characters, dating preferences, translation and scheduled proactive messages. See
+[companion chat setup](../../docs/companion-chat.md) for backend migration and Firebase configuration.
+
 Android-only React Native client for English Drive.
 
 Run Metro from the repository root with `pnpm mobile:start`, then run the Android app with
@@ -25,6 +29,13 @@ stay above the navigators in `App.tsx`, so switching tabs does not stop a call. 
 refreshes on focus and preserves search and drafts. Voice enrollment prevents switching tabs
 or leaving its detail screen until it finishes or is cancelled. Android Back pops a detail
 screen first, then returns to the Conversation tab.
+
+Voice enrollment collects 10 seconds of audio above the speech energy threshold within
+90 seconds. The three reading passages are suggestions, not sentence recognition tasks.
+A sticky capture panel shows microphone level, accepted audio duration, timeout remaining,
+and preparation/analysis/save stages, including feedback during quiet input. Progress reaches
+100% only after saving and releasing the microphone. Completion and failure display an alert
+and an inline result; cancellation keeps the previous profile and does not show a failure alert.
 
 Run mobile tests with `pnpm --filter @english-drive/mobile test` and TypeScript checks with
 `pnpm --filter @english-drive/mobile typecheck`.

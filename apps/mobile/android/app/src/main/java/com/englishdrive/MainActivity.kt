@@ -1,6 +1,7 @@
 package com.englishdrive
 
 import android.os.Bundle
+import android.content.Intent
 import com.swmansion.rnscreens.fragment.restoration.RNScreensFragmentFactory
 import com.englishdrive.assistant.EnglishDriveVoiceInteractionService
 import com.facebook.react.ReactActivity
@@ -13,6 +14,7 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     supportFragmentManager.fragmentFactory = RNScreensFragmentFactory()
     super.onCreate(savedInstanceState)
+    com.englishdrive.chat.ChatNotificationState.handleIntent(this, intent)
     if (intent.getBooleanExtra(
         EnglishDriveVoiceInteractionService.EXTRA_LAUNCHED_FROM_KEYGUARD,
         false,
@@ -20,6 +22,12 @@ class MainActivity : ReactActivity() {
     ) {
       setShowWhenLocked(true)
     }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    com.englishdrive.chat.ChatNotificationState.handleIntent(this, intent)
   }
 
   /**

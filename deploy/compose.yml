@@ -23,6 +23,8 @@ services:
     image: englishdrive-api:${DEPLOY_SHA:?Set DEPLOY_SHA}
     restart: unless-stopped
     env_file: /etc/englishdrive.env
+    volumes:
+      - /etc/englishdrive-secrets:/run/englishdrive-secrets:ro
     environment:
       NODE_ENV: production
       PORT: '3000'

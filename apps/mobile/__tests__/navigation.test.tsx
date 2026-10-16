@@ -19,10 +19,22 @@ jest.mock('../src/features/live-conversation/hooks/useLiveConversation');
 jest.mock('../src/features/speaker-verification/useSpeakerVerification');
 jest.mock('../src/features/vocabulary/useVocabulary');
 jest.mock('../src/features/vocabulary/useVocabularyDecks');
+const mockChatState = {
+  threads: [],
+  pending: [],
+  loading: false,
+  unread: 0,
+  refresh: jest.fn(async () => {}),
+  send: jest.fn(async () => {}),
+};
+jest.mock('../src/features/chat/useChat', () => ({
+  useChat: () => mockChatState,
+}));
 jest.mock('react-native-webrtc', () => ({}));
 
 const labels = {
   conversation: 'Hội thoại',
+  messages: 'Tin nhắn',
   vocabulary: 'Từ vựng',
   settings: 'Cài đặt',
 };
@@ -339,4 +351,21 @@ test('changing the conversation mode in its own screen updates the settings summ
   await press('Cuộc sống hằng ngày');
   await act(async () => settingsNavigation().goBack());
   expect(texts(screen('settings'))).toContain('Cuộc sống hằng ngày');
+});
+
+test('opens the messaging tab and group editor without interrupting a live call', async () => {
+  await select('messages');
+  expect(selected('messages')).toBe(true);
+  expect(texts(screen('messages'))).toContain(
+    'Làm quen với người bạn đầu tiên',
+  );
+  await press('Tạo nhóm');
+  expect(
+    renderer.root
+      .findAllByType(Text)
+      .some(node => node.props.children === 'Chọn 2–6 người bạn'),
+  ).toBe(true);
+  expect(realtime.stop).not.toHaveBeenCalled();
+  await select('conversation');
+  expect(texts(screen('conversation'))).toContain('Still talking');
 });

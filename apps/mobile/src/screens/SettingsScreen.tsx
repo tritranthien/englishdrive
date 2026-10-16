@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import AudioLines from 'lucide-react-native/icons/audio-lines';
 import ChevronRight from 'lucide-react-native/icons/chevron-right';
@@ -12,11 +12,13 @@ import type { useLiveConversation } from '../features/live-conversation/hooks/us
 import type { AuthResult, ConversationMode } from '../api/client';
 import type { useSpeakerVerification } from '../features/speaker-verification/useSpeakerVerification';
 import { SpeakerMatchSettings } from '../features/speaker-verification/SpeakerMatchSettings';
+import { EnrollmentFeedback } from '../features/speaker-verification/EnrollmentFeedback';
 import type { AssistantStatus } from '../native/commute-audio';
 
 export type SettingsDetail =
   | 'VoiceSettings'
   | 'AssistantSettings'
+  | 'ChatPreferences'
   | 'ConversationMode';
 const microphoneLabels = { phone: 'điện thoại', headset: 'tai nghe' } as const;
 
@@ -130,6 +132,9 @@ export function SettingsScreen({
       </View>
       <Text style={styles.sectionLabel}>GIỌNG NÓI & TRỢ LÝ</Text>
       <View style={styles.settingsGroup}>
+        <SettingsRow icon={MessageCircle} title="Bạn bè & tin nhắn" subtitle="Lịch nhắn ngẫu nhiên, giờ yên lặng và thông báo" onPress={() => onOpen('ChatPreferences')} />
+      </View>
+      <View style={styles.settingsGroup}>
         <SettingsRow
           icon={Mic}
           title="Bộ lọc giọng nói"
@@ -191,12 +196,12 @@ export function AssistantSettingsScreen({
           {assistantStatus && !assistantStatus.roleAvailable
             ? 'Cần Android 12 trở lên và hỗ trợ chọn trợ lý mặc định.'
             : assistantStatus?.isDefaultAssistant
-              ? assistantStatus.onDeviceWakeAvailable
-                ? assistantStatus.wakeArmed
-                  ? 'Đã bật. Bạn có thể khóa màn hình và nói “Hey English Drive”.'
-                  : 'Sẵn sàng bật nhận diện câu gọi trên thiết bị.'
-                : 'Điện thoại này chưa hỗ trợ nhận diện câu gọi trên thiết bị.'
-              : 'Trước tiên, chọn EnglishDrive làm trợ lý mặc định.'}
+            ? assistantStatus.onDeviceWakeAvailable
+              ? assistantStatus.wakeArmed
+                ? 'Đã bật. Bạn có thể khóa màn hình và nói “Hey English Drive”.'
+                : 'Sẵn sàng bật nhận diện câu gọi trên thiết bị.'
+              : 'Điện thoại này chưa hỗ trợ nhận diện câu gọi trên thiết bị.'
+            : 'Trước tiên, chọn EnglishDrive làm trợ lý mặc định.'}
         </Text>
         {assistantError ? (
           <Text style={styles.error}>{assistantError}</Text>
@@ -232,6 +237,13 @@ export function VoiceSettingsScreen({
   speakerVerification,
   assistantStatus,
 }: SettingsProps) {
+  const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const enrolling = speakerVerification.status?.enrolling === true;
+  useEffect(() => {
+    if (enrolling || speakerVerification.notice || speakerVerification.error) {
+      scroll.current?.scrollTo({ y: 0, animated: true });
+    }
+  }, [enrolling, speakerVerification.notice, speakerVerification.error]);
   const isActive = realtime.isActive;
   const liveAudioProfileKind =
     realtime.audioRoute.type === 'bluetooth' ||
@@ -240,7 +252,7 @@ export function VoiceSettingsScreen({
       : 'phone';
   const currentVoiceProfileKind = realtime.isActive
     ? liveAudioProfileKind
-    : (speakerVerification.status?.currentRouteKind ?? liveAudioProfileKind);
+    : speakerVerification.status?.currentRouteKind ?? liveAudioProfileKind;
   const currentVoiceProfileEnrolled =
     currentVoiceProfileKind === 'headset'
       ? speakerVerification.status?.headsetEnrolled
@@ -248,27 +260,35 @@ export function VoiceSettingsScreen({
   return (
     <ScrollView
       testID="screen-voice-settings"
+      ref={scroll}
+      stickyHeaderIndices={enrolling ? [0] : undefined}
       contentContainerStyle={styles.sessionContainer}
     >
+      <EnrollmentFeedback
+        active={enrolling}
+        enrollment={speakerVerification.enrollment}
+        progress={speakerVerification.progress}
+        notice={speakerVerification.notice}
+        error={speakerVerification.error}
+        onCancel={speakerVerification.cancel}
+      />
       <View style={styles.assistantPanel}>
         <Text style={styles.panelTitle}>BỘ LỌC GIỌNG NÓI</Text>
         <Text style={styles.panelText}>
           {!speakerVerification.status
             ? 'Đang kiểm tra bộ lọc giọng nói…'
             : !speakerVerification.status.configured
-              ? 'Không tìm thấy mô hình giọng nói. Vui lòng cài lại ứng dụng.'
-              : speakerVerification.status.enrolling
-                ? `Đang ghi mẫu giọng cho mic ${
-                    microphoneLabels[
-                      speakerVerification.status.enrollingKind ??
-                        currentVoiceProfileKind
-                    ]
-                  }. Hãy nói tự nhiên. Hoàn tất ${
-                    speakerVerification.progress
-                  }%.`
-                : currentVoiceProfileEnrolled
-                  ? `Đang lọc giọng qua mic ${microphoneLabels[currentVoiceProfileKind]}. Câu khớp giọng và câu trả lời ngắn kế tiếp được gửi đến Gemini.`
-                  : `Chưa có mẫu giọng cho mic ${microphoneLabels[currentVoiceProfileKind]}. Bạn vẫn có thể trò chuyện khi bộ lọc tắt.`}
+            ? 'Không tìm thấy mô hình giọng nói. Vui lòng cài lại ứng dụng.'
+            : speakerVerification.status.enrolling
+            ? `Đang ghi mẫu giọng cho mic ${
+                microphoneLabels[
+                  speakerVerification.status.enrollingKind ??
+                    currentVoiceProfileKind
+                ]
+              }. Hãy nói tự nhiên. Hoàn tất ${speakerVerification.progress}%.`
+            : currentVoiceProfileEnrolled
+            ? `Đang lọc giọng qua mic ${microphoneLabels[currentVoiceProfileKind]}. Câu khớp giọng và câu trả lời ngắn kế tiếp được gửi đến Gemini.`
+            : `Chưa có mẫu giọng cho mic ${microphoneLabels[currentVoiceProfileKind]}. Bạn vẫn có thể trò chuyện khi bộ lọc tắt.`}
         </Text>
         {speakerVerification.status?.configured &&
         !speakerVerification.status.enrolling ? (
@@ -289,8 +309,10 @@ export function VoiceSettingsScreen({
             </Text>
             <Text style={styles.enrollmentScriptHint}>
               Đọc cả tiếng Việt và tiếng Anh theo cách bạn thường nói; không cần
-              bắt chước giọng bản xứ. Ngắt nhẹ giữa các câu, tránh dừng lâu.
-              Tiếp tục đọc đến 100%; nếu còn thiếu, đọc lại từ đầu.
+              bắt chước giọng bản xứ. Ngắt nhẹ giữa các câu, tránh dừng lâu. Cần
+              tổng cộng 10 giây giọng nói rõ. Không cần đọc đúng hay lặp đủ 3
+              câu; ứng dụng ghi đặc trưng giọng, không chấm nội dung câu đọc.
+              Dừng đọc khi ứng dụng chuyển sang kiểm tra và lưu mẫu.
             </Text>
           </View>
         ) : null}
@@ -299,10 +321,7 @@ export function VoiceSettingsScreen({
             Mẫu giọng cũ không còn phù hợp với bộ lọc hiện tại. Hãy ghi lại mẫu.
           </Text>
         ) : null}
-        {speakerVerification.error ? (
-          <Text style={styles.error}>{speakerVerification.error}</Text>
-        ) : null}
-        {speakerVerification.status?.configured ? (
+        {speakerVerification.status?.configured && !enrolling ? (
           <>
             {(['phone', 'headset'] as const).map(kind => {
               const enrolled =
@@ -381,14 +400,6 @@ export function VoiceSettingsScreen({
                 </View>
               );
             })}
-            {speakerVerification.status.enrolling ? (
-              <Pressable
-                onPress={speakerVerification.cancel}
-                style={styles.textButton}
-              >
-                <Text style={styles.switchText}>Hủy ghi mẫu giọng</Text>
-              </Pressable>
-            ) : null}
           </>
         ) : null}
       </View>
