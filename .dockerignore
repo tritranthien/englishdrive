@@ -3,6 +3,9 @@
 **/coverage
 **/.env
 **/.env.*
+**/google-services.json
+**/*firebase-adminsdk*.json
+**/*firebase-service-account*.json
 **/*.tsbuildinfo
 .git
 .tmp

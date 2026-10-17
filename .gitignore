@@ -33,5 +33,7 @@ apps/api/prisma/dev.db
 *.apk
 
 # Push configuration and service account credentials
-apps/mobile/android/app/google-services.json
+google-services.json
+google-services (*).json
+*firebase-adminsdk*.json
 *firebase-service-account*.json
