@@ -36,9 +36,11 @@ describe.skipIf(!process.env.CHAT_TEST_DATABASE_URL)(
           })),
         }),
       ),
-      generate: vi.fn(async () => ({
-        memory: 'Only this conversation memory.',
-      })),
+      generate: vi.fn(
+        async (): Promise<Record<string, string>> => ({
+          memory: 'Only this conversation memory.',
+        }),
+      ),
     };
     const push = { send: vi.fn(async () => {}) };
     const chat = new ChatService(
@@ -98,6 +100,34 @@ describe.skipIf(!process.env.CHAT_TEST_DATABASE_URL)(
         data: { dueAt: new Date(0) },
       });
     }
+    it('defaults corrections on and preserves the off setting for older clients', async () => {
+      const defaults = await chat.preferences(userId);
+      await chat.savePreferences(userId, { ...defaults, autoCorrect: false });
+      const { autoCorrect, ...legacy } = defaults;
+      expect(autoCorrect).toBe(true);
+      await chat.savePreferences(userId, legacy);
+      expect((await chat.preferences(userId)).autoCorrect).toBe(false);
+    });
+
+    it.each([true, false])(
+      'passes autoCorrect=%s to the reply worker',
+      async (autoCorrect) => {
+        const prefs = await chat.preferences(userId);
+        await chat.savePreferences(userId, { ...prefs, autoCorrect });
+        const thread = await direct();
+        await chat.send(
+          userId,
+          thread.id,
+          randomUUID(),
+          'Yesterday I go to school.',
+        );
+        await due();
+        await worker().tick();
+        expect(ai.reply).toHaveBeenCalledWith(
+          expect.objectContaining({ autoCorrect }),
+        );
+      },
+    );
 
     it('deduplicates concurrent mobile retries and creates just one reply job', async () => {
       const thread = await direct(),
@@ -126,6 +156,76 @@ describe.skipIf(!process.env.CHAT_TEST_DATABASE_URL)(
           where: { threadId: thread.id, kind: 'PUSH' },
         }),
       ).toBe(1);
+    });
+    it('looks up only the selected phrase in an owned message and caches the definition', async () => {
+      const thread = await direct();
+      const message = await chat.send(
+        userId,
+        thread.id,
+        randomUUID(),
+        'I get off work at six.',
+      );
+      const definition = {
+        meaningVi: 'tan làm',
+        pronunciation: '/ɡet ɒf wɜːk/',
+        partOfSpeech: 'cụm động từ',
+        explanation: 'Kết thúc giờ làm việc.',
+        example: 'I get off work at five.',
+      };
+      ai.generate.mockResolvedValueOnce(definition);
+      const result = await chat.lookupVocabulary(
+        userId,
+        thread.id,
+        message.id,
+        2,
+        14,
+      );
+      expect(result).toEqual({ ...definition, term: 'get off work' });
+      expect(ai.generate.mock.calls[0]).toBeDefined();
+      expect((ai.generate.mock.calls[0] as unknown[])[1]).toEqual({
+        term: 'get off work',
+        message: message.content,
+      });
+      expect(
+        await chat.lookupVocabulary(userId, thread.id, message.id, 2, 14),
+      ).toEqual(result);
+      expect(ai.generate).toHaveBeenCalledTimes(1);
+      await expect(
+        chat.lookupVocabulary(randomUUID(), thread.id, message.id, 2, 14),
+      ).rejects.toThrow('Không tìm thấy');
+      await expect(
+        chat.lookupVocabulary(userId, thread.id, randomUUID(), 2, 14),
+      ).rejects.toThrow('Không tìm thấy');
+      for (const [start, end] of [
+        [-1, 3],
+        [3, 2],
+        [0, 999],
+        [1, 2],
+      ]) {
+        await expect(
+          chat.lookupVocabulary(userId, thread.id, message.id, start, end),
+        ).rejects.toThrow('Hãy chọn');
+      }
+      expect(ai.generate).toHaveBeenCalledTimes(1);
+    });
+    it('does not use a message from another thread as lookup context', async () => {
+      const thread = await direct();
+      const person = await chat.addCharacter(userId, { templateId: 'alex' });
+      const other = await chat.createThread(userId, {
+        kind: 'DIRECT',
+        title: person.name,
+        characterIds: [person.id],
+      });
+      const secret = await chat.send(
+        userId,
+        other.id,
+        randomUUID(),
+        'private-secret-marker',
+      );
+      await expect(
+        chat.lookupVocabulary(userId, thread.id, secret.id, 0, 7),
+      ).rejects.toThrow('Không tìm thấy');
+      expect(ai.generate).not.toHaveBeenCalled();
     });
     it('enforces account ownership and validates group membership and romance', async () => {
       const thread = await direct();
@@ -159,6 +259,100 @@ describe.skipIf(!process.env.CHAT_TEST_DATABASE_URL)(
       const context = ai.reply.mock.calls[0][0] as { [key: string]: unknown };
       expect(JSON.stringify(context)).not.toContain('private-secret-marker');
     });
+    it('waits three seconds after the latest send and coalesces a burst into one reply', async () => {
+      const thread = await direct();
+      const before = Date.now();
+      await chat.send(userId, thread.id, randomUUID(), 'Hello');
+      await chat.send(userId, thread.id, randomUUID(), 'One more thing');
+      const jobs = await prisma.chatJob.findMany({
+        where: { threadId: thread.id },
+      });
+      const pending = jobs.filter((job) => job.status === 'PENDING');
+      expect(pending).toHaveLength(1);
+      expect(pending[0].dueAt.getTime()).toBeGreaterThanOrEqual(before + 3000);
+      await worker().tick();
+      expect(ai.reply).not.toHaveBeenCalled();
+      await due();
+      await worker().tick();
+      expect(ai.reply).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(ai.reply.mock.calls[0][0])).toContain(
+        'One more thing',
+      );
+    });
+    it('holds replies while a draft is active, enforces ownership and expires abandoned presence', async () => {
+      const thread = await direct();
+      await chat.send(userId, thread.id, randomUUID(), 'First message');
+      await chat.typing(userId, thread.id, true);
+      await due();
+      await worker().tick();
+      expect(ai.reply).not.toHaveBeenCalled();
+      await expect(chat.typing(randomUUID(), thread.id, false)).rejects.toThrow(
+        'Không tìm thấy',
+      );
+      await chat.typing(userId, thread.id, false);
+      const pending = await prisma.chatJob.findFirstOrThrow({
+        where: { threadId: thread.id, status: 'PENDING' },
+      });
+      expect(pending.dueAt.getTime()).toBeGreaterThan(Date.now() + 2500);
+      await chat.typing(userId, thread.id, true);
+      await prisma.chatThread.update({
+        where: { id: thread.id },
+        data: { typingUntil: new Date(0) },
+      });
+      await due();
+      await worker().tick();
+      expect(ai.reply).toHaveBeenCalledTimes(1);
+    });
+    it.each(['typing', 'send'] as const)(
+      'discards in-flight output when the user resumes %s',
+      async (action) => {
+        const thread = await direct();
+        await chat.send(userId, thread.id, randomUUID(), 'Initial message');
+        await due();
+        let release!: () => void;
+        let started!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const generating = new Promise<void>((resolve) => {
+          started = resolve;
+        });
+        ai.reply.mockImplementationOnce(async (context) => {
+          started();
+          await gate;
+          return {
+            messages: [
+              { characterId: context.members[0].id, content: 'Stale reply' },
+            ],
+          };
+        });
+        const running = worker().tick();
+        await generating;
+        if (action === 'typing') await chat.typing(userId, thread.id, true);
+        else await chat.send(userId, thread.id, randomUUID(), 'New message');
+        release();
+        await running;
+        expect(
+          await prisma.chatMessage.count({
+            where: { threadId: thread.id, role: 'CHARACTER' },
+          }),
+        ).toBe(0);
+        if (action === 'typing') {
+          await chat.send(userId, thread.id, randomUUID(), 'New message');
+          await chat.typing(userId, thread.id, false);
+        }
+        await due();
+        await worker().tick();
+        expect(
+          await prisma.chatMessage.count({
+            where: { threadId: thread.id, role: 'CHARACTER' },
+          }),
+        ).toBe(1);
+        expect(JSON.stringify(ai.reply.mock.calls.at(-1)?.[0])).toContain(
+          'New message',
+        );
+      },
+    );
     it('reserves a shared daily limit across concurrent schedulers and does not catch up', async () => {
       const first = await direct();
       for (const templateId of ['alex', 'emma', 'leo']) {

@@ -7,10 +7,29 @@ import {
   quietHour,
   threadSchema,
   threadPatchSchema,
+  vocabularySelectionSchema,
 } from './chat.schemas.js';
 import { chatCatalog } from './chat.catalog.js';
 
 describe('chat contracts and scheduling', () => {
+  it('validates message selection offsets before looking up vocabulary', () => {
+    const selection = {
+      messageId: '12345678-1234-4123-8123-123456789012',
+      start: 2,
+      end: 14,
+    };
+    expect(vocabularySelectionSchema.safeParse(selection).success).toBe(true);
+    for (const patch of [
+      { start: -1 },
+      { start: 2.5 },
+      { end: 2 },
+      { end: 4001 },
+      { messageId: 'other' },
+    ])
+      expect(
+        vocabularySelectionSchema.safeParse({ ...selection, ...patch }).success,
+      ).toBe(false);
+  });
   it('provides twelve distinct, valid adult characters', () => {
     expect(chatCatalog).toHaveLength(12);
     expect(new Set(chatCatalog.map((c) => c.id)).size).toBe(12);

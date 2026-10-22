@@ -23,6 +23,7 @@ import BookOpen from 'lucide-react-native/icons/book-open';
 import MessageCircle from 'lucide-react-native/icons/message-circle';
 import Settings from 'lucide-react-native/icons/settings';
 import MessagesSquare from 'lucide-react-native/icons/messages-square';
+import Video from 'lucide-react-native/icons/video';
 import { useChat, type ChatSession } from '../features/chat/useChat';
 import { chatApi } from '../features/chat/chat.api';
 import { chatNotifications } from '../features/chat/chat.notifications';
@@ -36,6 +37,10 @@ import {
   ChatPreferencesScreen,
   ChatThreadSettingsScreen,
 } from '../features/chat/ChatSettingsScreens';
+import {
+  VideoHomeScreen,
+  VideoPlayerScreen,
+} from '../features/video/VideoScreens';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConversationScreen } from '../screens/ConversationScreen';
 import {
@@ -54,6 +59,7 @@ import {
 type Tabs = {
   Conversation: undefined;
   Messages: NavigatorScreenParams<MessageRoutes> | undefined;
+  Video: NavigatorScreenParams<VideoRoutes> | undefined;
   Vocabulary: undefined;
   Settings: undefined;
 };
@@ -64,6 +70,10 @@ type MessageRoutes = {
   ChatThread: { threadId: string };
   GroupEditor: undefined;
   ChatOptions: { threadId: string };
+};
+type VideoRoutes = {
+  VideoHome: undefined;
+  VideoPlayer: { videoId: string; title?: string };
 };
 type ConversationRoutes = { ConversationHome: undefined };
 type VocabularyRoutes = {
@@ -93,10 +103,14 @@ const ConversationStack = createNativeStackNavigator<ConversationRoutes>();
 const VocabularyStack = createNativeStackNavigator<VocabularyRoutes>();
 const SettingsStack = createNativeStackNavigator<SettingsRoutes>();
 const MessagesStack = createNativeStackNavigator<MessageRoutes>();
+const VideoStack = createNativeStackNavigator<VideoRoutes>();
 type TabIconProps = { color: string; size: number };
 const tabIcons = {
   Messages: ({ color, size }: TabIconProps) => (
     <MessagesSquare color={color} size={size} strokeWidth={1.8} />
+  ),
+  Video: ({ color, size }: TabIconProps) => (
+    <Video color={color} size={size} strokeWidth={1.8} />
   ),
   Conversation: ({ color, size }: TabIconProps) => (
     <MessageCircle color={color} size={size} strokeWidth={1.8} />
@@ -288,6 +302,8 @@ function ThreadContent({
       auth={conversation.auth}
       chat={chat}
       threadId={route.params.threadId}
+      onBack={() => navigation.popTo('MessagesHome')}
+      onSaveVocabulary={conversation.vocabularyNotebook.save}
       onSettings={() => navigation.navigate('ChatOptions', route.params)}
     />
   );
@@ -330,7 +346,10 @@ function ChatPreferencesContent() {
 }
 function MessagesNavigator() {
   return (
-    <MessagesStack.Navigator screenOptions={stackOptions}>
+    <MessagesStack.Navigator
+      initialRouteName="MessagesHome"
+      screenOptions={stackOptions}
+    >
       <MessagesStack.Screen
         name="MessagesHome"
         component={MessagesHome}
@@ -362,6 +381,70 @@ function MessagesNavigator() {
         options={{ title: 'Tùy chọn chat' }}
       />
     </MessagesStack.Navigator>
+  );
+}
+
+function VideoHomeContent({
+  navigation,
+}: NativeStackScreenProps<VideoRoutes, 'VideoHome'>) {
+  const { conversation } = useSession();
+  return (
+    <VideoHomeScreen
+      auth={conversation.auth}
+      onOpenVideo={(videoId, title) =>
+        navigation.navigate('VideoPlayer', { videoId, title })
+      }
+    />
+  );
+}
+
+function VideoPlayerContent({
+  route,
+  navigation,
+}: NativeStackScreenProps<VideoRoutes, 'VideoPlayer'>) {
+  const { conversation } = useSession();
+  const insets = useSafeAreaInsets();
+  const onFullscreenChange = useCallback(
+    (fullscreen: boolean) => {
+      navigation.setOptions({ headerShown: !fullscreen });
+      navigation.getParent()?.setOptions({
+        tabBarStyle: fullscreen
+          ? { display: 'none' }
+          : mainTabBarStyle(insets.bottom),
+      });
+    },
+    [navigation, insets.bottom],
+  );
+  return (
+    <VideoPlayerScreen
+      key={route.params.videoId}
+      auth={conversation.auth}
+      videoId={route.params.videoId}
+      onSaveVocabulary={conversation.vocabularyNotebook.save}
+      onFullscreenChange={onFullscreenChange}
+    />
+  );
+}
+
+function VideoNavigator() {
+  return (
+    <VideoStack.Navigator
+      initialRouteName="VideoHome"
+      screenOptions={stackOptions}
+    >
+      <VideoStack.Screen
+        name="VideoHome"
+        component={VideoHomeContent}
+        options={{ title: 'Video song ngữ' }}
+      />
+      <VideoStack.Screen
+        name="VideoPlayer"
+        component={VideoPlayerContent}
+        options={({ route }) => ({
+          title: route.params.title || 'Xem video & phụ đề',
+        })}
+      />
+    </VideoStack.Navigator>
   );
 }
 
@@ -503,14 +586,7 @@ export function AppNavigation(props: Props) {
             tabBarItemStyle: {
               opacity: props.conversation.isEnrolling ? 0.4 : 1,
             },
-            tabBarStyle: {
-              backgroundColor: '#0b1727',
-              borderTopColor: '#233247',
-              height: 64 + insets.bottom,
-              paddingTop: 6,
-              paddingBottom: insets.bottom + 6,
-              elevation: 0,
-            },
+            tabBarStyle: mainTabBarStyle(insets.bottom),
             tabBarIcon: tabIcons[route.name],
           })}
         >
@@ -532,6 +608,14 @@ export function AppNavigation(props: Props) {
             }}
           />
           <Tab.Screen
+            name="Video"
+            component={VideoNavigator}
+            options={{
+              title: 'Video',
+              tabBarAccessibilityLabel: 'Video',
+            }}
+          />
+          <Tab.Screen
             name="Vocabulary"
             component={VocabularyNavigator}
             options={{ title: 'Từ vựng', tabBarAccessibilityLabel: 'Từ vựng' }}
@@ -545,6 +629,17 @@ export function AppNavigation(props: Props) {
       </NavigationContainer>
     </SessionContext.Provider>
   );
+}
+
+function mainTabBarStyle(bottom: number) {
+  return {
+    backgroundColor: '#0b1727',
+    borderTopColor: '#233247',
+    height: 64 + bottom,
+    paddingTop: 6,
+    paddingBottom: bottom + 6,
+    elevation: 0,
+  };
 }
 
 const navigationStyles = StyleSheet.create({

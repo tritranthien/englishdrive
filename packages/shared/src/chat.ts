@@ -12,6 +12,7 @@ export type ChatCharacterInput = {
 export type ChatCharacter = ChatCharacterInput & { id: string; templateId?: string | null };
 export type ChatPreferences = {
   enabled: boolean;
+  autoCorrect: boolean;
   minMinutes: number;
   maxMinutes: number;
   dailyLimit: number;
@@ -52,4 +53,17 @@ export type ChatMessagePage = {
   thread: ChatThread;
   replyStatus: 'IDLE' | 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED' | 'CANCELLED';
   replyError: string | null;
+};
+export type ChatVocabularyLookup = {
+  term: string;
+  meaningVi: string;
+  pronunciation: string;
+  partOfSpeech: string;
+  explanation: string;
+  example: string;
+};
+
+export type ChatHelpResult = {
+  text: string;
+  vocabulary?: Array<{ term: string; meaningVi: string; example: string }>;
 };

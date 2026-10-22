@@ -139,3 +139,13 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+// Metro follows the monorepo watchFolders, but Gradle's default bundle inputs
+// only cover the mobile app. Shared runtime helpers must invalidate the APK too.
+tasks.configureEach {
+    if (name.startsWith("createBundle") && name.endsWith("JsAndAssets")) {
+        inputs.dir(new File(rootDir, "../../../packages/shared/src"))
+            .withPropertyName("sharedJavaScriptSources")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    }
+}

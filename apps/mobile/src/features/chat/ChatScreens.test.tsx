@@ -1,6 +1,15 @@
 import React from 'react';
 import Renderer, { act } from 'react-test-renderer';
-import { TextInput, Text } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Keyboard,
+  Platform,
+  DeviceEventEmitter,
+  StyleSheet,
+  TextInput,
+  Text,
+  View,
+} from 'react-native';
 import {
   ChatThreadScreen,
   CharacterEditorScreen,
@@ -9,13 +18,21 @@ import {
 import { chatApi, type ChatMessage, type ChatThread } from './chat.api';
 import { chatStorage } from './chat.storage';
 import type { ChatSession } from './useChat';
+import { ChatWordPopup } from './ChatWordPopup';
+import { ChatMessageText } from './ChatMessageText';
 
 jest.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+jest.mock('@react-navigation/elements', () => ({ useHeaderHeight: () => 80 }));
+jest.mock(
+  'react-native-safe-area-context',
+  () => require('react-native-safe-area-context/jest/mock').default,
+);
 jest.mock('./chat.api', () => ({
   chatApi: {
     messages: jest.fn(),
     read: jest.fn(),
     help: jest.fn(),
+    typing: jest.fn(async () => ({})),
     addCharacter: jest.fn(),
   },
 }));
@@ -50,6 +67,63 @@ it('merges incremental pages without duplicating or reversing messages', () => {
     'second',
   ]);
 });
+it('keeps the composer above the keyboard as the tab bar hides and restores the layout on dismissal', async () => {
+  const platform = jest.replaceProperty(Platform, 'OS', 'android');
+  (chatApi.messages as jest.Mock).mockResolvedValue({
+    items: [],
+    thread,
+    replyStatus: 'IDLE',
+    hasMore: false,
+  });
+  const chat = {
+    pending: [],
+    refresh: jest.fn(async () => {}),
+  } as unknown as ChatSession;
+  let root!: Renderer.ReactTestRenderer;
+  await act(async () => {
+    root = Renderer.create(
+      <ChatThreadScreen
+        auth={auth}
+        threadId="thread"
+        chat={chat}
+        onSettings={jest.fn()}
+        onBack={jest.fn()}
+        onSaveVocabulary={jest.fn()}
+      />,
+    );
+  });
+  const avoiding = root.root.findByType(KeyboardAvoidingView);
+  const layout = async (height: number) => {
+    await act(async () => {
+      await avoiding.findByType(View).props.onLayout({
+        persist: jest.fn(),
+        nativeEvent: { layout: { x: 0, y: 0, width: 400, height } },
+      });
+    });
+  };
+  const style = () => StyleSheet.flatten(avoiding.findByType(View).props.style);
+  await layout(700);
+  await act(async () => {
+    DeviceEventEmitter.emit('keyboardDidShow', {
+      endCoordinates: { screenY: 500, screenX: 0, width: 400, height: 300 },
+      duration: 0,
+      easing: 'keyboard',
+    });
+  });
+  expect(Keyboard.isVisible()).toBe(true);
+  expect(style().paddingBottom).toBe(280);
+  // Hiding the bottom tab bar gives the screen another 64 points of space.
+  await layout(764);
+  expect(style().paddingBottom).toBe(344);
+  expect(style().flex).toBe(1);
+  await act(async () => {
+    DeviceEventEmitter.emit('keyboardDidHide', {});
+  });
+  await layout(700);
+  expect(style().paddingBottom).toBe(0);
+  await act(async () => root.unmount());
+  platform.restore();
+});
 it('shows sender and translation controls and puts suggestions into the draft without sending', async () => {
   (chatApi.messages as jest.Mock).mockResolvedValue({
     items: [message],
@@ -74,6 +148,8 @@ it('shows sender and translation controls and puts suggestions into the draft wi
         threadId="thread"
         chat={chat}
         onSettings={jest.fn()}
+        onBack={jest.fn()}
+        onSaveVocabulary={jest.fn()}
       />,
     );
   });
@@ -82,8 +158,64 @@ it('shows sender and translation controls and puts suggestions into the draft wi
     .map(n => React.Children.toArray(n.props.children).join(''))
     .join('\n');
   expect(texts).toContain('Mai');
-  expect(texts).toContain('How was your day?');
-  expect(texts).toContain('Dịch');
+  expect(root.root.findByType(ChatMessageText).props.content).toBe(
+    'How was your day?',
+  );
+  await act(async () =>
+    root.root
+      .findByType(ChatMessageText)
+      .props.onSelect({ start: 0, end: 3, x: 20, y: 100 }),
+  );
+  expect(root.root.findByType(ChatWordPopup).props.message).toEqual(message);
+  await act(async () =>
+    root.root.findByType(ChatWordPopup).props.onChoosePhrase(),
+  );
+  expect(root.root.findByType(ChatMessageText).props.choosingPhrase).toBe(true);
+  expect(root.root.findAllByType(ChatWordPopup)).toHaveLength(0);
+  await act(async () =>
+    root.root
+      .findByType(ChatMessageText)
+      .props.onSelect({ start: 13, end: 16, x: 80, y: 100 }),
+  );
+  expect(root.root.findByType(ChatWordPopup).props.selection).toEqual({
+    start: 0,
+    end: 16,
+    x: 80,
+    y: 100,
+  });
+  await act(async () =>
+    root.root.findByType(ChatWordPopup).props.onChoosePhrase(),
+  );
+  await act(async () =>
+    root.root
+      .findAllByProps({ accessibilityLabel: 'Hủy chọn cụm' })
+      .find(node => typeof node.props.onPress === 'function')!
+      .props.onPress(),
+  );
+  expect(root.root.findByType(ChatMessageText).props.choosingPhrase).toBe(
+    false,
+  );
+  expect(root.root.findByType(ChatMessageText).props.selected).toBeUndefined();
+  await act(async () =>
+    root.root
+      .findByType(ChatMessageText)
+      .props.onSelect({ start: 13, end: 16, x: 80, y: 100 }),
+  );
+  await act(async () =>
+    root.root.findByType(ChatWordPopup).props.onChoosePhrase(),
+  );
+  await act(async () =>
+    root.root
+      .findByType(ChatMessageText)
+      .props.onSelect({ start: 0, end: 3, x: 20, y: 100 }),
+  );
+  expect(root.root.findByType(ChatWordPopup).props.selection).toEqual({
+    start: 0,
+    end: 16,
+    x: 20,
+    y: 100,
+  });
+  await act(async () => root.root.findByType(ChatWordPopup).props.onClose());
   await act(async () =>
     root.root
       .findByProps({

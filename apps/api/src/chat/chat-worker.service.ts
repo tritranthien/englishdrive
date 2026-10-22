@@ -28,6 +28,18 @@ export class ChatWorkerService implements OnModuleInit, OnModuleDestroy {
   ) {}
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
+    void this.prisma.chatJob
+      .updateMany({
+        where: { kind: 'REPLY', status: 'FAILED' },
+        data: {
+          status: 'PENDING',
+          attempts: 0,
+          error: null,
+          leaseUntil: null,
+          dueAt: new Date(),
+        },
+      })
+      .catch((error) => this.logger.error(error));
     this.worker = setInterval(() => {
       void this.tick().catch((error) => this.logger.error(error));
     }, 2000);
@@ -157,6 +169,7 @@ export class ChatWorkerService implements OnModuleInit, OnModuleDestroy {
       WHERE id IN (
         SELECT j.id FROM "ChatJob" j WHERE j.kind IN ('REPLY','PROACTIVE','PUSH') AND j.attempts < 3
         AND ((j.status='PENDING' AND j."dueAt"<=NOW()) OR (j.status='RUNNING' AND j."leaseUntil"<NOW()))
+        AND (j.kind='PUSH' OR NOT EXISTS (SELECT 1 FROM "ChatThread" t WHERE t.id=j."threadId" AND t."typingUntil">NOW()))
         AND NOT EXISTS (SELECT 1 FROM "ChatJob" other WHERE other."threadId"=j."threadId" AND other.status='RUNNING' AND other."leaseUntil">NOW())
         ORDER BY j."dueAt" ASC FOR UPDATE SKIP LOCKED LIMIT 1
       ) RETURNING id`;
@@ -165,6 +178,7 @@ export class ChatWorkerService implements OnModuleInit, OnModuleDestroy {
     const job = await this.prisma.chatJob.findUniqueOrThrow({
       where: { id: rows[0].id },
     });
+    if (job.status !== 'RUNNING' || job.leaseToken !== leaseToken) return;
     try {
       if (job.kind === 'PUSH') {
         await this.push.send(job.threadId);
@@ -218,6 +232,7 @@ export class ChatWorkerService implements OnModuleInit, OnModuleDestroy {
       ).reverse();
       const result = await this.ai.reply({
         kind: thread.kind,
+        autoCorrect: prefs.autoCorrect ?? true,
         romance: thread.romance,
         members,
         memory: thread.memory,
@@ -284,6 +299,9 @@ export class ChatWorkerService implements OnModuleInit, OnModuleDestroy {
         if (
           current.archived ||
           current.revision !== thread.revision ||
+          (current.typingUntil != null && current.typingUntil > new Date()) ||
+          (job.kind === 'REPLY' &&
+            current.lastSequence !== thread.lastSequence) ||
           (job.kind === 'PROACTIVE' &&
             (!currentPrefs.enabled ||
               !current.proactiveEnabled ||
@@ -295,14 +313,18 @@ export class ChatWorkerService implements OnModuleInit, OnModuleDestroy {
             where: { id: job.id },
             data: { status: 'CANCELLED' },
           });
-          if (job.kind === 'REPLY' && !current.archived)
+          if (
+            job.kind === 'REPLY' &&
+            !current.archived &&
+            current.revision !== thread.revision
+          )
             await tx.chatJob.create({
               data: {
                 key: `reply:${thread.id}:revision:${current.revision}:${current.lastSequence}`,
                 threadId: thread.id,
                 kind: 'REPLY',
                 triggerSequence: current.lastSequence,
-                dueAt: new Date(),
+                dueAt: new Date(Date.now() + 3000),
               },
             });
           return;

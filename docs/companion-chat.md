@@ -23,11 +23,24 @@ Templates are not duplicated on application startup and do not require a separat
   account-scoped persistent outbox. Retries retain client IDs. Cached messages are available offline.
 - An open chat polls every 3 seconds; inbox synchronization runs every 20 seconds while active.
   The server remains the source of truth; push delivery is not used as message storage.
+- Replies wait at least 3 seconds after the latest user message. A nonempty draft in the
+  foreground holds replies until it is sent or cleared; the client renews this hold every
+  10 seconds. Leaving the chat or backgrounding releases it, and a lost connection expires
+  the hold after 30 seconds. New sends coalesce pending replies and revoke stale generation
+  leases, so an answer generated before a new message or typing event is never published.
+- The conversation's **Danh sách chat** button returns to the inbox even when opened directly
+  from a notification without an existing inbox route.
+- Each sent message has **Tra & lưu từ**. Select a single word, or tap its first and last
+  words for a phrase, then **Tra nghĩa** for a contextual Vietnamese meaning, pronunciation,
+  part of speech, usage and an English example. Meanings/examples can be edited before
+  **Lưu vào từ vựng**, which uses the existing account vocabulary store and synchronization.
+  Selection is limited to 120 characters. Lookup alone never saves a word.
 
 ## Backend and jobs
 
 Run `pnpm db:generate`, deploy migrations, and restart the API. The additive migration
 `20261017000000_companion_chat` does not modify existing learning or voice data.
+Deploy `20261018000000_chat_typing` and the API before installing the typing-aware APK.
 `GEMINI_CHAT_MODEL` defaults to `GEMINI_ANALYSIS_MODEL`; `GEMINI_API_KEY` remains server-side.
 
 `CHAT_PROACTIVE_ENABLED=true` enables the scheduler (off by default for rollout). Users still
@@ -40,17 +53,22 @@ sequence allocation and creation of the push outbox job occur in one transaction
 
 All `/chat/*` routes require the existing Bearer token and ownership checks:
 
-| Routes | Purpose |
-| --- | --- |
-| `GET /chat/status`, `/chat/catalog` | Capabilities and character templates |
-| `GET/POST /chat/characters`, `PATCH /chat/characters/:id` | Owned character profiles |
-| `GET/PATCH /chat/preferences` | Account schedule and timezone |
-| `GET/POST /chat/threads`, `GET/PATCH /chat/threads/:id` | Direct/group conversations and options |
-| `GET/POST /chat/threads/:id/messages` | Cursor history and idempotent sends |
-| `POST /chat/threads/:id/read`, `/retry`, `/help` | Read cursor, failed response retry, learning help |
-| `POST /chat/devices`, `DELETE /chat/devices/:installationId` | Bind/unbind a push installation |
+| Routes                                                       | Purpose                                                 |
+| ------------------------------------------------------------ | ------------------------------------------------------- |
+| `GET /chat/status`, `/chat/catalog`                          | Capabilities and character templates                    |
+| `GET/POST /chat/characters`, `PATCH /chat/characters/:id`    | Owned character profiles                                |
+| `GET/PATCH /chat/preferences`                                | Account schedule and timezone                           |
+| `GET/POST /chat/threads`, `GET/PATCH /chat/threads/:id`      | Direct/group conversations and options                  |
+| `GET/POST /chat/threads/:id/messages`                        | Cursor history and idempotent sends                     |
+| `POST /chat/threads/:id/read`, `/retry`, `/help`             | Read cursor, failed response retry, learning help       |
+| `POST /chat/threads/:id/typing`                              | Renew/release the draft hold with `{ active: boolean }` |
+| `POST /chat/devices`, `DELETE /chat/devices/:installationId` | Bind/unbind a push installation                         |
 
 History accepts `before` or `after` sequence cursors, returns at most 50 messages and `hasMore`.
+`POST /chat/threads/:id/vocabulary` accepts `{ messageId, start, end }` with JavaScript UTF-16
+selection offsets. The server verifies thread ownership and message membership, derives the
+term from stored message text, and caches definitions per selection. Lookups share the
+60/account/hour help budget; their context contains only the selected message.
 Messages have a stable ID, per-thread sequence, role, optional character ID and creation time.
 Client sends require a UUID `clientMessageId`; repeated sends return the existing message.
 Live message pages also expose reply job status. The server limits user sends to 20/thread/minute
@@ -88,6 +106,7 @@ is supplied; the app explicitly reports when push or the proactive scheduler is 
    ```
 
    Redeploy/recreate the API container so environment and the read-only mount apply.
+
 6. Install the newly configured APK, sign in, and open **Cài đặt → Bạn bè & tin nhắn →
    Cho phép thông báo tin nhắn**. Verify the global Android notification permission and the
    **Tin nhắn từ bạn bè** channel are enabled. On Xiaomi, allow background notifications/autostart
@@ -107,6 +126,22 @@ Official references: [Android setup](https://firebase.google.com/docs/android/se
 [HTTP v1 authorization](https://firebase.google.com/docs/cloud-messaging/send/v1-api).
 
 ## Verification
+
+Chat word options include **Giải thích từ** for the selected word/phrase and **Cả câu**
+for the whole message, without selecting the whole sentence. Sentence explanations include
+useful expressions with individual save buttons. Word explanations cover contextual meaning,
+other common uses and a reusable example. Both remain in a compact popover.
+
+**Cài đặt → Bạn bè & tin nhắn → AI sửa lỗi tin nhắn** controls automatic English corrections.
+The account preference `autoCorrect` defaults to `true`, including existing accounts via the
+`20261022000000_chat_auto_correct` migration. When enabled, one character gently offers the
+corrected English and a brief Vietnamese reason before continuing the conversation. When off,
+corrections are offered only on request. Proactive messages do not revisit earlier mistakes.
+Older clients that omit this field preserve the stored preference on update.
+
+The explanation help response retains `text` and adds `vocabulary`, an array of
+`{ term, meaningVi, example }`. Explanation and vocabulary caches use versioned keys so old
+definitions do not hide the richer results.
 
 Run mobile tests/typecheck, backend tests/typecheck and a release Android build. PostgreSQL
 integration tests are enabled only by `CHAT_TEST_DATABASE_URL`; this must name a disposable

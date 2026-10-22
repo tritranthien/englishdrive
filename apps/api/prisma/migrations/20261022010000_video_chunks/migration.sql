@@ -1,0 +1,1 @@
+ALTER TABLE "VideoLesson" ADD COLUMN "processedUntilMs" INTEGER NOT NULL DEFAULT 0;

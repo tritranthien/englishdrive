@@ -7,6 +7,7 @@ COPY packages ./packages
 COPY apps/api ./apps/api
 RUN pnpm install --frozen-lockfile --filter @english-drive/api... --filter @english-drive/shared...
 RUN pnpm db:generate
+RUN pnpm --filter @english-drive/shared build
 RUN DATABASE_URL=postgresql://test:test@localhost:5432/test \
     JWT_SECRET=build-test-only-secret-at-least-32-characters \
     pnpm --filter @english-drive/api test --maxWorkers=1

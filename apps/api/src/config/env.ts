@@ -16,6 +16,12 @@ const environmentSchema = z.object({
   JWT_EXPIRES_IN: z.string().min(1).default('1d'),
   LIVE_PROVIDER: z.enum(['gemini', 'openai']).default('gemini'),
   GEMINI_API_KEY: optionalSecret,
+  TRANSCRIPTION_URL: z.string().url().default('http://localhost:8000'),
+  TRANSCRIPTION_TIMEOUT_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1800),
   GEMINI_CHAT_MODEL: optionalSecret,
   GOOGLE_APPLICATION_CREDENTIALS: optionalSecret,
   CHAT_PROACTIVE_ENABLED: z

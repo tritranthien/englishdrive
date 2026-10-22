@@ -7,6 +7,7 @@ import { useLiveConversation } from '../src/features/live-conversation/hooks/use
 import { useSpeakerVerification } from '../src/features/speaker-verification/useSpeakerVerification';
 import { useVocabulary } from '../src/features/vocabulary/useVocabulary';
 import { useVocabularyDecks } from '../src/features/vocabulary/useVocabularyDecks';
+import { chatApi, type ChatThread } from '../src/features/chat/chat.api';
 
 jest.mock(
   'react-native-safe-area-context',
@@ -20,7 +21,7 @@ jest.mock('../src/features/speaker-verification/useSpeakerVerification');
 jest.mock('../src/features/vocabulary/useVocabulary');
 jest.mock('../src/features/vocabulary/useVocabularyDecks');
 const mockChatState = {
-  threads: [],
+  threads: [] as ChatThread[],
   pending: [],
   loading: false,
   unread: 0,
@@ -369,3 +370,53 @@ test('opens the messaging tab and group editor without interrupting a live call'
   await select('conversation');
   expect(texts(screen('conversation'))).toContain('Still talking');
 });
+
+test.each([false, true])(
+  'returns to the inbox from a conversation, including a cold notification route (%s)',
+  async cold => {
+    const thread = {
+      id: 'thread',
+      title: 'Mai',
+      kind: 'DIRECT',
+      members: [],
+      updatedAt: new Date().toISOString(),
+    } as unknown as ChatThread;
+    mockChatState.threads = [thread];
+    jest.spyOn(chatApi, 'messages').mockResolvedValue({
+      items: [],
+      thread,
+      replyStatus: 'IDLE',
+      replyError: null,
+      hasMore: false,
+    });
+    try {
+      await select('messages');
+      if (cold) {
+        const navigation = renderer.root.findAll(
+          node =>
+            node.props.route?.name === 'MessagesHome' &&
+            node.props.navigation?.reset,
+        )[0].props.navigation;
+        await act(async () =>
+          navigation.reset({
+            index: 0,
+            routes: [{ name: 'ChatThread', params: { threadId: 'thread' } }],
+          }),
+        );
+      } else {
+        await act(async () => button('Mở chat Mai').props.onPress());
+      }
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+      });
+      await act(async () => button('‹ Danh sách chat').props.onPress());
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+      });
+      expect(screen('messages')).toBeDefined();
+      expect(button('Mở chat Mai')).toBeDefined();
+    } finally {
+      mockChatState.threads = [];
+    }
+  },
+);

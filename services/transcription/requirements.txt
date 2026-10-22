@@ -1,0 +1,6 @@
+fastapi==0.121.3
+uvicorn==0.38.0
+faster-whisper==1.2.1
+av==16.0.1
+yt-dlp[default]==2026.8.19
+httpx==0.28.1

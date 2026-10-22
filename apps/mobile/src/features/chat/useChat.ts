@@ -99,10 +99,12 @@ export function useChat(auth: AuthResult) {
       };
       await chatStorage.stage(userId, message);
       if (mounted.current) setPending(await chatStorage.pending(userId));
-      await chatStorage.saveDraft(userId, threadId, '');
+      await chatStorage.clearDraftIfUnchanged(userId, threadId, content);
+      await flushChatOutbox(userId, token);
+      if (mounted.current) setPending(await chatStorage.pending(userId));
       void refresh();
     },
-    [userId, refresh],
+    [userId, token, refresh],
   );
   return {
     threads,

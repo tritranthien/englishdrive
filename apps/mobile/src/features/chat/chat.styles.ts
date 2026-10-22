@@ -1,6 +1,10 @@
 import { StyleSheet } from 'react-native';
 export const chatStyles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#07111f' },
+  threadHeader: { padding: 12, gap: 8 },
+  sheetHeader: { padding: 12 },
+  selectionText: { color: '#c1ccdc', fontSize: 18, lineHeight: 34 },
+  selectedWord: { backgroundColor: '#287a63', color: '#ffffff' },
   content: { padding: 18, gap: 14, paddingBottom: 32 },
   card: {
     padding: 16,

@@ -1,4 +1,18 @@
 services:
+  transcription:
+    build:
+      context: .
+      dockerfile: services/transcription/Dockerfile
+    init: true
+    ports:
+      - '127.0.0.1:8000:8000'
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-2}
+    volumes:
+      - whisper_models:/models
+    tmpfs:
+      - /tmp/englishdrive:size=512m,uid=1000,gid=1000,mode=0700
   postgres:
     image: postgres:17-alpine
     environment:
@@ -16,4 +30,5 @@ services:
       retries: 10
 
 volumes:
+  whisper_models:
   postgres_data:

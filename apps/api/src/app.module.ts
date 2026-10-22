@@ -12,6 +12,7 @@ import { LiveModule } from './live/live.module.js';
 import { AnalysisModule } from './analysis/analysis.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { ChatModule } from './chat/chat.module.js';
+import { VideosModule } from './videos/videos.module.js';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { ChatModule } from './chat/chat.module.js';
     AnalysisModule,
     AdminModule,
     ChatModule,
+    VideosModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

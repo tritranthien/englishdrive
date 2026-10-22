@@ -21,16 +21,17 @@ compose() {
   docker compose --env-file /etc/englishdrive.env -f "$release/deploy/compose.yml" "$@"
 }
 docker build -f "$release/apps/api/Dockerfile" -t "englishdrive-api:$sha" "$release"
+docker build -f "$release/services/transcription/Dockerfile" -t "englishdrive-transcription:$sha" "$release"
 compose up -d --wait --wait-timeout 120 postgres
 backup="$base/backups/$(date -u +%Y%m%dT%H%M%SZ)-$sha.sql.gz"
 compose exec -T postgres pg_dump -U english_drive english_drive | gzip > "$backup"
 compose run --rm --no-deps api pnpm exec prisma migrate deploy
-if ! compose up -d --wait --wait-timeout 150 api; then
+if ! compose up -d --wait --wait-timeout 150 transcription api; then
   echo 'API failed its health check.' >&2
   if [[ -n "$previous" ]]; then
     echo "Restoring previous application $previous; database migrations remain applied." >&2
     DEPLOY_SHA="$previous" docker compose --env-file /etc/englishdrive.env \
-      -f "$base/releases/$previous/deploy/compose.yml" up -d --wait --wait-timeout 150 api
+      -f "$base/releases/$previous/deploy/compose.yml" up -d --wait --wait-timeout 150
   fi
   exit 1
 fi

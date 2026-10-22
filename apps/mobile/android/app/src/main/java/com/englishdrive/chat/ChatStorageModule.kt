@@ -1,6 +1,8 @@
 package com.englishdrive.chat
 
 import android.content.ContentValues
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -18,6 +20,15 @@ class ChatStorageModule(context: ReactApplicationContext) : ReactContextBaseJava
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
   }
   override fun getName() = "ChatStorage"
+  @ReactMethod fun copyText(text: String, promise: Promise) {
+    reactApplicationContext.runOnUiQueueThread {
+      try {
+        val clipboard = reactApplicationContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("English Drive", text))
+        promise.resolve(null)
+      } catch (error: Exception) { promise.reject("CHAT_COPY", "Không sao chép được nội dung", error) }
+    }
+  }
   @ReactMethod fun newId(promise: Promise) = promise.resolve(UUID.randomUUID().toString())
   @ReactMethod fun read(userId: String, key: String, promise: Promise) {
     try {

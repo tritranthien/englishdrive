@@ -20,12 +20,14 @@ import { ChatPushService } from './chat-push.service.js';
 import {
   characterSchema,
   deviceSchema,
+  draftTranslationSchema,
   helpSchema,
   pageSchema,
   preferencesSchema,
   sendSchema,
   threadPatchSchema,
   threadSchema,
+  vocabularySelectionSchema,
 } from './chat.schemas.js';
 
 @Controller('chat')
@@ -117,6 +119,14 @@ export class ChatController {
   ) {
     return this.chat.send(r.user.id, id, body.clientMessageId, body.content);
   }
+  @Post('threads/:id/typing') typing(
+    @Req() r: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(z.object({ active: z.boolean() })))
+    body: { active: boolean },
+  ) {
+    return this.chat.typing(r.user.id, id, body.active);
+  }
   @Post('threads/:id/read') read(
     @Req() r: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
@@ -133,12 +143,34 @@ export class ChatController {
   ) {
     return this.chat.retry(r.user.id, id);
   }
+  @Post('threads/:id/draft-translation') translateDraft(
+    @Req() r: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(draftTranslationSchema))
+    body: z.infer<typeof draftTranslationSchema>,
+  ) {
+    return this.chat.translateDraft(r.user.id, id, body.draft);
+  }
   @Post('threads/:id/help') help(
     @Req() r: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(helpSchema)) body: z.infer<typeof helpSchema>,
   ) {
     return this.chat.help(r.user.id, id, body.action, body.messageId);
+  }
+  @Post('threads/:id/vocabulary') lookupVocabulary(
+    @Req() r: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(vocabularySelectionSchema))
+    body: z.infer<typeof vocabularySelectionSchema>,
+  ) {
+    return this.chat.lookupVocabulary(
+      r.user.id,
+      id,
+      body.messageId,
+      body.start,
+      body.end,
+    );
   }
   @Post('devices') device(
     @Req() r: AuthenticatedRequest,

@@ -60,7 +60,7 @@ export function ChatPreferencesScreen({ auth }: { auth: AuthResult }) {
         chatApi.preferences(auth.accessToken),
         chatApi.status(auth.accessToken),
       ]);
-      setPrefs(settings);
+      setPrefs({ ...settings, autoCorrect: settings.autoCorrect ?? true });
       setStatus(service);
       setValues({
         min: String(settings.minMinutes),
@@ -117,7 +117,7 @@ export function ChatPreferencesScreen({ auth }: { auth: AuthResult }) {
           timezone: values.timezone,
         }),
       );
-      setNotice('Đã lưu lịch nhắn tin. Lịch mới áp dụng từ bây giờ.');
+      setNotice('Đã lưu cài đặt tin nhắn.');
     } catch (e) {
       setError(messageFor(e));
     } finally {
@@ -156,6 +156,17 @@ export function ChatPreferencesScreen({ auth }: { auth: AuthResult }) {
         <ChatButton label="Tải cài đặt tin nhắn" onPress={() => void load()} />
       ) : (
         <>
+          <View style={s.card}>
+            <ChatToggle
+              label="AI sửa lỗi tin nhắn"
+              value={prefs.autoCorrect}
+              onChange={autoCorrect => setPrefs({ ...prefs, autoCorrect })}
+            />
+            <Text style={s.hint}>
+              Khi bạn nhắn sai tiếng Anh, nhân vật sẽ gợi ý câu đúng và giải
+              thích ngắn rồi tiếp tục trò chuyện.
+            </Text>
+          </View>
           <View style={s.card}>
             <ChatToggle
               label="Cho phép bạn bè chủ động nhắn"
@@ -219,7 +230,7 @@ export function ChatPreferencesScreen({ auth }: { auth: AuthResult }) {
             />
           </View>
           <ChatButton
-            label={busy ? 'Đang lưu…' : 'Lưu lịch nhắn tin'}
+            label={busy ? 'Đang lưu…' : 'Lưu cài đặt tin nhắn'}
             disabled={busy}
             onPress={() => void save()}
           />

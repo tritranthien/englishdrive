@@ -3,6 +3,20 @@ import { flushChatOutbox } from './useChat';
 import { chatApi } from './chat.api';
 jest.mock('./chat.api', () => ({ chatApi: { send: jest.fn() } }));
 
+it('clears only the sent draft while preserving edits queued during a send', async () => {
+  await chatStorage.saveDraft('draft-race', 'thread', '  Sent text  ');
+  await chatStorage.clearDraftIfUnchanged('draft-race', 'thread', 'Sent text');
+  expect(await chatStorage.draft('draft-race', 'thread')).toBe('');
+  await chatStorage.saveDraft('draft-race', 'thread', 'Sent text');
+  await Promise.all([
+    chatStorage.saveDraft('draft-race', 'thread', 'New text being typed'),
+    chatStorage.clearDraftIfUnchanged('draft-race', 'thread', 'Sent text'),
+  ]);
+  expect(await chatStorage.draft('draft-race', 'thread')).toBe(
+    'New text being typed',
+  );
+});
+
 it('preserves concurrent offline messages and isolates accounts and drafts', async () => {
   const first = await chatStorage.newId();
   const second = await chatStorage.newId();

@@ -92,4 +92,14 @@ export const chatStorage = {
     read<string>(userId, `draft:${threadId}`, ''),
   saveDraft: (userId: string, threadId: string, draft: string) =>
     serialized(userId, () => write(userId, `draft:${threadId}`, draft)),
+  clearDraftIfUnchanged: (
+    userId: string,
+    threadId: string,
+    sentContent: string,
+  ) =>
+    serialized(userId, async () => {
+      const current = await read<string>(userId, `draft:${threadId}`, '');
+      if (current.trim() === sentContent)
+        await write(userId, `draft:${threadId}`, '');
+    }),
 };

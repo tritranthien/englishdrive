@@ -28,6 +28,7 @@ const intervals = <
 export const preferencesSchema = z
   .object({
     enabled: z.boolean(),
+    autoCorrect: z.boolean().optional(),
     minMinutes: z.number().int().min(5).max(10080),
     maxMinutes: z.number().int().min(5).max(10080),
     dailyLimit: z.number().int().min(1).max(50),
@@ -81,6 +82,10 @@ export const sendSchema = z.object({
   clientMessageId: z.string().uuid(),
   content: text(4000),
 });
+// Preserve whitespace: offsets refer to the exact text in the composer's snapshot.
+export const draftTranslationSchema = z.object({
+  draft: z.string().min(1).max(4000),
+});
 export const pageSchema = z.object({
   before: z.coerce.number().int().positive().optional(),
   after: z.coerce.number().int().min(0).optional(),
@@ -103,6 +108,33 @@ export const generatedSchema = z.object({
     .array(z.object({ characterId: z.string(), content: text(1200) }))
     .min(1)
     .max(4),
+});
+export const vocabularySelectionSchema = z
+  .object({
+    messageId: z.string().uuid(),
+    start: z.number().int().min(0).max(3999),
+    end: z.number().int().min(1).max(4000),
+  })
+  .refine((value) => value.end > value.start, 'Select a word or phrase');
+export const vocabularyDefinitionSchema = z.object({
+  meaningVi: text(1000),
+  pronunciation: text(160),
+  partOfSpeech: text(100),
+  explanation: text(1000),
+  example: text(2000),
+});
+
+export const explanationSchema = z.object({
+  text: text(3000),
+  vocabulary: z
+    .array(
+      z.object({
+        term: text(120),
+        meaningVi: text(1000),
+        example: text(2000),
+      }),
+    )
+    .max(6),
 });
 
 export function localClock(now: Date, timezone: string) {

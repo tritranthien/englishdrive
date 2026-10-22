@@ -28,11 +28,15 @@ services:
     environment:
       NODE_ENV: production
       PORT: '3000'
+      TRANSCRIPTION_URL: http://transcription:8000
+      TRANSCRIPTION_TIMEOUT_SECONDS: ${TRANSCRIPTION_TIMEOUT_SECONDS:-1800}
       DATABASE_URL: postgresql://english_drive:${POSTGRES_PASSWORD}@postgres:5432/english_drive?schema=public
     ports:
       - '${API_BIND_ADDRESS:-127.0.0.1}:3000:3000'
     depends_on:
       postgres:
+        condition: service_healthy
+      transcription:
         condition: service_healthy
     healthcheck:
       test:
@@ -51,5 +55,36 @@ services:
       options:
         max-size: 10m
         max-file: '3'
+  transcription:
+    image: englishdrive-transcription:${DEPLOY_SHA:?Set DEPLOY_SHA}
+    restart: unless-stopped
+    init: true
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-2}
+      TRANSCRIPTION_MAX_DURATION_SECONDS: ${TRANSCRIPTION_MAX_DURATION_SECONDS:-3600}
+      TRANSCRIPTION_MAX_AUDIO_BYTES: ${TRANSCRIPTION_MAX_AUDIO_BYTES:-104857600}
+      TRANSCRIPTION_TIMEOUT_SECONDS: ${TRANSCRIPTION_TIMEOUT_SECONDS:-1800}
+    volumes:
+      - whisper_models:/models
+    tmpfs:
+      - /tmp/englishdrive:size=512m,uid=1000,gid=1000,mode=0700
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
 volumes:
+  whisper_models:
   postgres_data:

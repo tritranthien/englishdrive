@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  Keyboard,
   KeyboardAvoidingView,
   Pressable,
   ScrollView,
@@ -12,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
+import { useHeaderHeight } from '@react-navigation/elements';
 import type { AuthResult } from '../../api/client';
 import {
   chatApi,
@@ -23,6 +25,11 @@ import {
 import { chatStorage } from './chat.storage';
 import { chatNotifications } from './chat.notifications';
 import type { ChatSession } from './useChat';
+import { useChatTyping } from './useChatTyping';
+import { ChatMessageText, type WordSelection } from './ChatMessageText';
+import { ChatWordPopup } from './ChatWordPopup';
+import { useDraftTranslation } from './useDraftTranslation';
+import type { VocabularyHighlight } from '../live-conversation/types/liveConversation.types';
 import { chatStyles as s } from './chat.styles';
 
 export function ChatButton({
@@ -426,21 +433,67 @@ export function ChatThreadScreen({
   threadId,
   chat,
   onSettings,
+  onBack,
+  onSaveVocabulary,
 }: {
   auth: AuthResult;
   threadId: string;
   chat: ChatSession;
   onSettings: () => void;
+  onBack: () => void;
+  onSaveVocabulary: (words: VocabularyHighlight[]) => Promise<void>;
 }) {
+  const headerHeight = useHeaderHeight();
+  const [wordMenu, setWordMenu] = useState<{
+    message: ChatMessage;
+    selection: WordSelection;
+  }>();
+  const [phraseAnchor, setPhraseAnchor] = useState<{
+    messageId: string;
+    selection: WordSelection;
+  }>();
+  const [selectedWord, setSelectedWord] = useState<{
+    messageId: string;
+    selection: WordSelection;
+  }>();
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const draftEdited = useRef(false);
   const [thread, setThread] = useState<ChatThread>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
+  const latestDraft = useRef(draft);
+  latestDraft.current = draft;
   const [error, setError] = useState<string>();
   const [reply, setReply] = useState('IDLE');
   const [hasMore, setHasMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const focused = useIsFocused();
+  const persistDraft = useCallback(
+    (value: string) => {
+      draftEdited.current = true;
+      latestDraft.current = value;
+      setDraft(value);
+      void chatStorage.saveDraft(auth.user.id, threadId, value).catch(() => {});
+    },
+    [auth.user.id, threadId],
+  );
+  const translation = useDraftTranslation({
+    token: auth.accessToken,
+    threadId,
+    draft,
+    selection,
+    onTranslated: (value, nextSelection) => {
+      persistDraft(value);
+      setSelection(nextSelection);
+    },
+  });
+  useEffect(() => {
+    setWordMenu(undefined);
+    setPhraseAnchor(undefined);
+    setSelectedWord(undefined);
+  }, [focused, threadId]);
+  useChatTyping(auth.accessToken, threadId, focused, !!draft.trim());
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const polling = useRef(false);
   const olderLoading = useRef(false);
@@ -500,7 +553,10 @@ export function ChatThreadScreen({
     void chatStorage
       .draft(auth.user.id, threadId)
       .then(value => {
-        if (alive.current) setDraft(value);
+        if (alive.current && !draftEdited.current) {
+          setDraft(value);
+          setSelection({ start: value.length, end: value.length });
+        }
       })
       .catch(() => {});
     return () => {
@@ -550,11 +606,16 @@ export function ChatThreadScreen({
     }
   }
   async function send() {
-    if (!draft.trim() || sending) return;
+    if (!draft.trim() || sending || translation.blocked) return;
     setSending(true);
+    draftEdited.current = true;
     try {
-      await chat.send(threadId, draft.trim());
-      setDraft('');
+      const sentDraft = draft;
+      await chat.send(threadId, sentDraft.trim());
+      if (latestDraft.current === sentDraft) {
+        persistDraft('');
+        setSelection({ start: 0, end: 0 });
+      }
       setError(undefined);
       atBottom.current = true;
     } catch (e) {
@@ -568,6 +629,7 @@ export function ChatThreadScreen({
     messageId?: string,
   ) {
     if (busy) return;
+    const requestedDraft = latestDraft.current;
     setBusy(true);
     try {
       const result = await chatApi.help(
@@ -577,8 +639,9 @@ export function ChatThreadScreen({
         messageId,
       );
       if (action === 'suggest') {
-        setDraft(result.text);
-        await chatStorage.saveDraft(auth.user.id, threadId, result.text);
+        if (latestDraft.current !== requestedDraft) return;
+        persistDraft(result.text);
+        setSelection({ start: result.text.length, end: result.text.length });
       } else
         Alert.alert(
           action === 'translate'
@@ -600,19 +663,26 @@ export function ChatThreadScreen({
       ),
   );
   return (
-    <KeyboardAvoidingView style={s.container} behavior="height">
-      <View style={[s.row, { padding: 12 }]}>
-        <View style={s.grow}>
-          <Text style={s.title}>{thread?.title ?? 'Tin nhắn'}</Text>
-          <Text style={s.hint}>
-            {thread?.kind === 'GROUP'
-              ? 'Nhóm bạn AI'
-              : thread?.romance
-                ? 'Hẹn hò · Nhân vật AI'
-                : 'Bạn bè · Nhân vật AI'}
-          </Text>
+    <KeyboardAvoidingView
+      style={s.container}
+      behavior="padding"
+      keyboardVerticalOffset={headerHeight}
+    >
+      <View style={s.threadHeader}>
+        <ChatButton label="‹ Danh sách chat" onPress={onBack} />
+        <View style={s.row}>
+          <View style={s.grow}>
+            <Text style={s.title}>{thread?.title ?? 'Tin nhắn'}</Text>
+            <Text style={s.hint}>
+              {thread?.kind === 'GROUP'
+                ? 'Nhóm bạn AI'
+                : thread?.romance
+                  ? 'Hẹn hò · Nhân vật AI'
+                  : 'Bạn bè · Nhân vật AI'}
+            </Text>
+          </View>
+          <ChatButton label="Tùy chọn chat" onPress={onSettings} />
         </View>
-        <ChatButton label="Tùy chọn chat" onPress={onSettings} />
       </View>
       <ScrollView
         ref={scroll}
@@ -620,6 +690,10 @@ export function ChatThreadScreen({
         contentContainerStyle={s.content}
         keyboardShouldPersistTaps="handled"
         scrollEventThrottle={150}
+        onLayout={() => {
+          if (atBottom.current)
+            scroll.current?.scrollToEnd({ animated: false });
+        }}
         onScroll={event => {
           const { contentOffset, layoutMeasurement, contentSize } =
             event.nativeEvent;
@@ -661,9 +735,52 @@ export function ChatThreadScreen({
                   {character?.name ?? 'Bạn AI'}
                 </Text>
               )}
-              <Text selectable style={s.text}>
-                {message.content}
-              </Text>
+              <ChatMessageText
+                content={message.content}
+                selected={
+                  selectedWord?.messageId === message.id
+                    ? selectedWord.selection
+                    : undefined
+                }
+                choosingPhrase={phraseAnchor?.messageId === message.id}
+                onSelect={word => {
+                  Keyboard.dismiss();
+                  const anchor =
+                    phraseAnchor?.messageId === message.id
+                      ? phraseAnchor.selection
+                      : undefined;
+                  const chosen = anchor
+                    ? {
+                        ...word,
+                        start: Math.min(anchor.start, word.start),
+                        end: Math.max(anchor.end, word.end),
+                      }
+                    : word;
+                  if (chosen.end - chosen.start > 120) {
+                    setError('Hãy chọn tối đa 120 ký tự.');
+                    return;
+                  }
+                  setPhraseAnchor(undefined);
+                  setSelectedWord({ messageId: message.id, selection: chosen });
+                  setWordMenu({ message, selection: chosen });
+                }}
+              />
+              {phraseAnchor?.messageId === message.id && (
+                <View style={s.row}>
+                  <Text style={[s.hint, s.grow]}>Chạm từ cuối để chọn cụm</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Hủy chọn cụm"
+                    hitSlop={8}
+                    onPress={() => {
+                      setPhraseAnchor(undefined);
+                      setSelectedWord(undefined);
+                    }}
+                  >
+                    <Text style={s.label}>Hủy</Text>
+                  </Pressable>
+                </View>
+              )}
               <Text style={s.hint}>
                 {new Date(message.createdAt).toLocaleTimeString('vi-VN', {
                   hour: '2-digit',
@@ -671,24 +788,6 @@ export function ChatThreadScreen({
                 })}
                 {message.role === 'USER' ? ' · Đã gửi' : ''}
               </Text>
-              {message.role === 'CHARACTER' && (
-                <View style={s.row}>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={busy}
-                    onPress={() => void help('translate', message.id)}
-                  >
-                    <Text style={s.label}>Dịch</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={busy}
-                    onPress={() => void help('explain', message.id)}
-                  >
-                    <Text style={s.label}>Giải thích</Text>
-                  </Pressable>
-                </View>
-              )}
             </View>
           );
         })}
@@ -727,6 +826,32 @@ export function ChatThreadScreen({
         )}
       </ScrollView>
       <View style={s.composer}>
+        {phraseAnchor && (
+          <View style={s.row}>
+            <Text style={[s.hint, s.grow]}>Chạm từ cuối để chọn cả cụm.</Text>
+            <ChatButton
+              label="Hủy chọn cụm"
+              onPress={() => {
+                setPhraseAnchor(undefined);
+                setSelectedWord(undefined);
+              }}
+            />
+          </View>
+        )}
+        {translation.translating && (
+          <Text accessibilityLiveRegion="polite" style={s.hint}>
+            Đang chuyển phần trong dấu ` sang tiếng Anh…
+          </Text>
+        )}
+        {translation.error && (
+          <View>
+            <Text style={s.error}>{translation.error}</Text>
+            <ChatButton label="Thử dịch lại" onPress={translation.retry} />
+          </View>
+        )}
+        <Text style={s.hint}>
+          Chưa biết cách viết? Đặt tiếng Việt trong cặp dấu ` để tự dịch.
+        </Text>
         <ChatButton
           label={busy ? 'Đang chuẩn bị trợ giúp…' : 'Gợi ý trả lời'}
           disabled={busy}
@@ -741,20 +866,45 @@ export function ChatThreadScreen({
             multiline
             maxLength={4000}
             value={draft}
-            onChangeText={value => {
-              setDraft(value);
-              void chatStorage
-                .saveDraft(auth.user.id, threadId, value)
-                .catch(() => {});
-            }}
+            selection={selection}
+            onSelectionChange={event =>
+              setSelection(event.nativeEvent.selection)
+            }
+            onChangeText={persistDraft}
           />
           <ChatButton
             label="Gửi"
-            disabled={sending || !draft.trim()}
+            disabled={sending || !draft.trim() || translation.blocked}
             onPress={() => void send()}
           />
         </View>
       </View>
+      {wordMenu && (
+        <ChatWordPopup
+          key={`${wordMenu.message.id}:${wordMenu.selection.start}:${wordMenu.selection.end}`}
+          token={auth.accessToken}
+          message={wordMenu.message}
+          selection={wordMenu.selection}
+          onClose={() => {
+            setWordMenu(undefined);
+            setSelectedWord(undefined);
+          }}
+          onChoosePhrase={() => {
+            setPhraseAnchor({
+              messageId: wordMenu.message.id,
+              selection: wordMenu.selection,
+            });
+            setWordMenu(undefined);
+          }}
+          onHelp={action => {
+            const id = wordMenu.message.id;
+            setWordMenu(undefined);
+            setSelectedWord(undefined);
+            void help(action, id);
+          }}
+          onSave={onSaveVocabulary}
+        />
+      )}
     </KeyboardAvoidingView>
   );
 }

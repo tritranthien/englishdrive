@@ -1,4 +1,5 @@
 import { apiRequest } from '../../api/client';
+import type { DraftTranslationResponse } from '../../../../../packages/shared/src/draft-translation';
 import type {
   ChatCharacter,
   ChatCharacterInput,
@@ -6,6 +7,8 @@ import type {
   ChatMessagePage,
   ChatPreferences,
   ChatThread,
+  ChatVocabularyLookup,
+  ChatHelpResult,
 } from '../../../../../packages/shared/src/chat';
 export type {
   ChatCharacter,
@@ -14,8 +17,20 @@ export type {
   ChatMessagePage,
   ChatPreferences,
   ChatThread,
+  ChatVocabularyLookup,
+  ChatHelpResult,
 } from '../../../../../packages/shared/src/chat';
 export const chatApi = {
+  translateDraft: (token: string, id: string, draft: string) =>
+    apiRequest<DraftTranslationResponse>(
+      `/chat/threads/${id}/draft-translation`,
+      {
+        token,
+        method: 'POST',
+        body: { draft },
+        timeoutMs: 100000,
+      },
+    ),
   status: (token: string) =>
     apiRequest<{ pushConfigured: boolean; proactiveEnabled: boolean }>(
       '/chat/status',
@@ -80,6 +95,26 @@ export const chatApi = {
       body: { clientMessageId, content },
       timeoutMs: 15000,
     }),
+  vocabulary: (
+    token: string,
+    id: string,
+    messageId: string,
+    start: number,
+    end: number,
+  ) =>
+    apiRequest<ChatVocabularyLookup>(`/chat/threads/${id}/vocabulary`, {
+      token,
+      method: 'POST',
+      body: { messageId, start, end },
+      timeoutMs: 40000,
+    }),
+  typing: (token: string, id: string, active: boolean) =>
+    apiRequest(`/chat/threads/${id}/typing`, {
+      token,
+      method: 'POST',
+      body: { active },
+      timeoutMs: 5000,
+    }),
   read: (token: string, id: string, sequence: number) =>
     apiRequest(`/chat/threads/${id}/read`, {
       token,
@@ -94,7 +129,7 @@ export const chatApi = {
     action: 'translate' | 'explain' | 'suggest',
     messageId?: string,
   ) =>
-    apiRequest<{ text: string }>(`/chat/threads/${id}/help`, {
+    apiRequest<ChatHelpResult>(`/chat/threads/${id}/help`, {
       token,
       method: 'POST',
       body: { action, messageId },
